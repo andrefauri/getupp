@@ -1,0 +1,31 @@
+# Secrets
+photo-eval/.env
+
+# Photos (local test set — ground truth data)
+photo-eval/photos/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Xcode
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Dropbox
+.dropbox
+desktop.ini

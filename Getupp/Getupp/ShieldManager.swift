@@ -2,7 +2,7 @@
 //  ShieldManager.swift
 //  Getupp
 //
-//  This is the production-quality module that manages all Family Controls logic.
+//  Production-quality module that manages all Family Controls logic.
 //  Views call into this class; no Family Controls code lives in views.
 //
 
@@ -19,78 +19,70 @@ class ShieldManager: ObservableObject {
     // MARK: - Published properties (UI binds to these)
 
     /// Whether the user has granted Family Controls permission.
-    /// Possible values: .notDetermined, .denied, .approved
     @Published var authorizationStatus: AuthorizationStatus
 
     /// The apps and categories the user selected to block.
-    /// FamilyActivitySelection holds opaque tokens — we can count them but not see names.
     @Published var activitySelection = FamilyActivitySelection() {
-        // Belt-and-suspenders: fires when code sets this directly.
-        // NOTE: does NOT fire when SwiftUI writes through a Binding (e.g. the picker).
-        // The view handles that case via .onChange(of:).
         didSet { saveSelection() }
     }
 
     // MARK: - Published properties (verification state)
 
-    /// Whether the user has verified (passed photo check) today.
     @Published var isVerifiedToday: Bool
 
     // MARK: - Published properties (shield state)
 
-    /// Whether shields are currently active. Persisted so the UI reflects reality after restart.
-    @Published var isShielded: Bool
+    @Published var isShielded:   Bool
+    @Published var isMonitoring: Bool   // true only when a real WakeSchedule is registered
 
-    /// Whether a DeviceActivity schedule is currently registered.
-    @Published var isMonitoring: Bool
+    /// The wake schedule the user has configured, nil if none set yet.
+    @Published var wakeSchedule: WakeSchedule?
 
-    /// The scheduled window start/end times, for display in the UI.
+    /// Non-nil when the last schedule registration failed.
+    @Published var scheduleError: String?
+
+    // For debug display only — shows the currently registered window times.
     @Published var scheduleStart: DateComponents?
-    @Published var scheduleEnd: DateComponents?
+    @Published var scheduleEnd:   DateComponents?
 
-    // MARK: - Constants (delegated to GetuppShared so the extension can reuse them)
+    // MARK: - Private
 
-    private let appGroupID  = GetuppShared.appGroupID
-    private let selectionKey = GetuppShared.selectionKey
-    private let shieldedKey  = GetuppShared.shieldedKey
-
-    // ManagedSettingsStore is the API that actually applies/removes shields.
-    // Using the shared store ensures the extension and app target the same settings.
-    private let store = GetuppShared.store
-
-    // Holds our Combine subscription so it stays alive as long as ShieldManager does.
+    private let store        = GetuppShared.store
     private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Init
 
     init() {
-        // Read current authorization status synchronously at startup.
         self.authorizationStatus = AuthorizationCenter.shared.authorizationStatus
 
-        // Restore persisted shield state. ManagedSettings shields survive app restarts
-        // on their own (they're system-level), but we need to know the state for the UI.
-        // Must be initialized before loadSelection() below — Swift requires all stored
-        // properties to be set before any self method is called.
-        let defaults = UserDefaults(suiteName: GetuppShared.appGroupID)
+        let defaults = GetuppShared.defaults
         self.isShielded      = defaults?.bool(forKey: GetuppShared.shieldedKey)    ?? false
         self.isMonitoring    = defaults?.bool(forKey: GetuppShared.isMonitoringKey) ?? false
         self.isVerifiedToday = GetuppShared.isVerifiedToday()
+        self.wakeSchedule    = GetuppShared.loadWakeSchedule()
         self.scheduleStart   = nil
         self.scheduleEnd     = nil
 
-        // Restore any selection the user made in a previous session.
         self.activitySelection = loadSelection() ?? FamilyActivitySelection()
 
-        // Reconciliation: if user passed verification today but shield is still active
-        // (e.g. app was killed between pass and removeShield), clear it now.
+        // If the user verified but the shield is still up (app was killed mid-flow), clear it.
         if self.isVerifiedToday && self.isShielded {
             GetuppShared.removeShield()
             self.isShielded = false
         }
 
-        // AuthorizationCenter loads its true status asynchronously after launch.
-        // This subscription catches that update and any future changes (e.g. user
-        // revokes permission in Settings) and keeps our @Published status in sync.
+        // Reflect the registered schedule times in the UI if we have a WakeSchedule.
+        if let schedule = self.wakeSchedule, self.isMonitoring {
+            var start = DateComponents()
+            start.hour   = schedule.startHour
+            start.minute = schedule.startMinute
+            var end = DateComponents()
+            end.hour   = schedule.endHour
+            end.minute = schedule.endMinute
+            self.scheduleStart = start
+            self.scheduleEnd   = end
+        }
+
         AuthorizationCenter.shared
             .objectWillChange
             .receive(on: DispatchQueue.main)
@@ -102,97 +94,181 @@ class ShieldManager: ObservableObject {
 
     // MARK: - Authorization
 
-    /// Asks the system to show the Family Controls authorization prompt.
-    /// Must be called inside a Task{} because it's async.
     @MainActor
     func requestAuthorization() async {
         do {
-            // .individual means this app manages screen time for the device owner (not a child).
             try await AuthorizationCenter.shared.requestAuthorization(for: .individual)
         } catch {
-            // Authorization was denied or an error occurred — not a crash.
             print("[ShieldManager] Authorization error: \(error)")
         }
-        // Re-read status after the system prompt is dismissed.
         self.authorizationStatus = AuthorizationCenter.shared.authorizationStatus
     }
 
-    // MARK: - Scheduling
+    // MARK: - Wake Schedule persistence + registration
 
-    /// Registers a daily DeviceActivity schedule.
-    /// When the window starts, the Monitor extension calls intervalDidStart and applies shields.
-    /// When it ends, it calls intervalDidEnd and removes them.
-    ///
-    /// - Parameters:
-    ///   - start: When the blocking window begins each day (hour/minute).
-    ///   - end:   When it ends each day (hour/minute).
-    func startMonitoring(start: DateComponents, end: DateComponents) {
-        // DeviceActivitySchedule is wall-clock based (hour:minute), repeating daily.
-        let schedule = DeviceActivitySchedule(
-            intervalStart: start,
-            intervalEnd: end,
-            repeats: true
-        )
+    /// Persists `schedule` to the App Group and re-registers the DeviceActivity.
+    /// Does NOT touch the current shield state — callers handle Case A / Case B side effects.
+    func saveWakeSchedule(_ schedule: WakeSchedule) {
+        GetuppShared.saveWakeSchedule(schedule)
+        self.wakeSchedule = schedule
 
         do {
-            // DeviceActivityCenter is the system API that registers the schedule.
-            // It launches the Monitor extension process at the scheduled times.
-            try DeviceActivityCenter().startMonitoring(GetuppShared.activityName, during: schedule)
-            isMonitoring  = true
-            scheduleStart = start
-            scheduleEnd   = end
-            GetuppShared.defaults?.set(true, forKey: GetuppShared.isMonitoringKey)
-            GetuppShared.logBreadcrumb("Monitoring started — window \(formatTime(start))–\(formatTime(end))")
+            try registerSchedule(schedule)
+            self.scheduleError = nil
         } catch {
-            print("[ShieldManager] Failed to start monitoring: \(error)")
-            GetuppShared.logBreadcrumb("startMonitoring error: \(error)")
+            self.scheduleError = error.localizedDescription
         }
     }
 
-    /// Cancels the registered schedule. The extension won't fire again until re-registered.
-    func stopMonitoring() {
-        DeviceActivityCenter().stopMonitoring([GetuppShared.activityName])
-        isMonitoring = false
-        GetuppShared.defaults?.set(false, forKey: GetuppShared.isMonitoringKey)
-        GetuppShared.logBreadcrumb("Monitoring stopped")
+    /// Case A — "Block me now": apply shield immediately and record when it should end.
+    func applyImmediateBlock(for schedule: WakeSchedule) {
+        applyShield()
+        recordActiveBlockEnd(for: schedule)
+        GetuppShared.logBreadcrumb("Day-0 block applied immediately")
     }
 
-    /// Convenience: schedules a debug window starting ~2 minutes from now, lasting 15 minutes.
-    /// Apple enforces a minimum interval of 15 minutes for DeviceActivity schedules.
+    /// Case A — "Start tomorrow": write exemptDate so the Monitor extension skips today.
+    func markExemptToday() {
+        GetuppShared.defaults?.set(Date(), forKey: GetuppShared.exemptDateKey)
+        GetuppShared.logBreadcrumb("Exempt today — schedule starts tomorrow")
+    }
+
+    // MARK: - Registration engine
+
+    /// Stops all known window activities, then registers a new repeating schedule.
+    /// Phase A: .everyday → single "getupp.window.everyday" activity.
+    private func registerSchedule(_ schedule: WakeSchedule) throws {
+        let center = DeviceActivityCenter()
+
+        // Stop-all before re-registering so no orphaned activities survive edits.
+        center.stopMonitoring([GetuppShared.legacyActivityName, GetuppShared.windowActivityName])
+
+        guard schedule.isEnabled else {
+            isMonitoring = false
+            GetuppShared.defaults?.set(false, forKey: GetuppShared.isMonitoringKey)
+            return
+        }
+
+        var start = DateComponents()
+        start.hour   = schedule.startHour
+        start.minute = schedule.startMinute
+
+        var end = DateComponents()
+        end.hour   = schedule.endHour
+        end.minute = schedule.endMinute
+
+        let deviceSchedule = DeviceActivitySchedule(
+            intervalStart: start,
+            intervalEnd:   end,
+            repeats:       true
+        )
+
+        // Phase A: only .everyday path. Phase B will add per-weekday registrations here.
+        try center.startMonitoring(GetuppShared.windowActivityName, during: deviceSchedule)
+
+        isMonitoring  = true
+        scheduleStart = start
+        scheduleEnd   = end
+        GetuppShared.defaults?.set(true, forKey: GetuppShared.isMonitoringKey)
+        GetuppShared.logBreadcrumb("Schedule registered — window \(schedule.startDisplayString)–\(schedule.endDisplayString)")
+    }
+
+    // MARK: - Debug scheduling
+
+    /// Registers a temporary debug window: starts ~2 minutes from now, lasts 15 minutes.
+    /// Uses "getupp.debug" activity name so it doesn't interfere with the real schedule.
     func startDebugWindow() {
-        let now = Date()
-        let startDate = now.addingTimeInterval(2 * 60)   // 2 minutes from now
-        let endDate   = now.addingTimeInterval(17 * 60)  // 17 minutes from now (15 min window)
+        let now       = Date()
+        let startDate = now.addingTimeInterval(2  * 60)   // +2 min
+        let endDate   = now.addingTimeInterval(17 * 60)   // +17 min = 15-min window
 
-        let cal = Calendar.current
-        let start = cal.dateComponents([.hour, .minute], from: startDate)
-        let end   = cal.dateComponents([.hour, .minute], from: endDate)
+        let cal   = Calendar.current
+        var start = cal.dateComponents([.hour, .minute], from: startDate)
+        var end   = cal.dateComponents([.hour, .minute], from: endDate)
 
-        startMonitoring(start: start, end: end)
+        let schedule = DeviceActivitySchedule(
+            intervalStart: start,
+            intervalEnd:   end,
+            repeats:       true
+        )
+
+        do {
+            try DeviceActivityCenter().startMonitoring(GetuppShared.debugActivityName, during: schedule)
+            // Update display-only properties for the debug section.
+            scheduleStart = start
+            scheduleEnd   = end
+            GetuppShared.logBreadcrumb("Debug window registered — \(formatTime(start))–\(formatTime(end))")
+        } catch {
+            print("[ShieldManager] Debug window error: \(error)")
+            GetuppShared.logBreadcrumb("Debug window error: \(error)")
+        }
     }
 
-    // Formats DateComponents (hour/minute) as "HH:MM" for display.
-    private func formatTime(_ dc: DateComponents) -> String {
-        let h = dc.hour ?? 0
-        let m = dc.minute ?? 0
-        return String(format: "%02d:%02d", h, m)
+    /// Stops ALL registered activities (real + debug). POC emergency unlock.
+    func stopMonitoring() {
+        DeviceActivityCenter().stopMonitoring(GetuppShared.allActivityNames)
+        isMonitoring  = false
+        scheduleStart = nil
+        scheduleEnd   = nil
+        GetuppShared.defaults?.set(false, forKey: GetuppShared.isMonitoringKey)
+        GetuppShared.logBreadcrumb("All schedules stopped (Stop Schedule)")
+    }
+
+    // MARK: - Foreground reconciliation (R4)
+
+    /// Called on every app-active transition. Compares expected vs actual shield state
+    /// and corrects drift from missed DeviceActivity callbacks (known Apple reliability issue).
+    func reconcileState() {
+        let now      = Date()
+        let defaults = GetuppShared.defaults
+
+        // ── activeBlockEnd is authoritative when it exists ──────────────────────
+        if let blockEnd = defaults?.object(forKey: GetuppShared.activeBlockEndKey) as? Date {
+            if now > blockEnd {
+                // Current block has expired — clear everything.
+                defaults?.removeObject(forKey: GetuppShared.activeBlockEndKey)
+                if isShielded {
+                    removeShield()
+                    GetuppShared.logBreadcrumb("Reconcile: activeBlockEnd passed — shield cleared")
+                }
+            } else if !isShielded && !isVerifiedToday {
+                // Should still be blocked but shield was lost (e.g. after reboot).
+                applyShield()
+                GetuppShared.logBreadcrumb("Reconcile: inside active block — shield reapplied")
+            }
+            return  // activeBlockEnd is the source of truth; schedule times are irrelevant here.
+        }
+
+        // ── No activeBlockEnd — derive expected state from WakeSchedule ──────────
+        guard let schedule = wakeSchedule, schedule.isEnabled else { return }
+
+        let insideWindow = schedule.isWindowActive(now: now)
+        let verified     = GetuppShared.isVerifiedToday()
+        let exempt       = GetuppShared.isExemptToday()
+
+        if insideWindow && !verified && !exempt {
+            if !isShielded {
+                // Missed intervalDidStart.
+                applyShield()
+                recordActiveBlockEnd(for: schedule, now: now)
+                GetuppShared.logBreadcrumb("Reconcile: missed intervalDidStart — shield applied")
+            }
+        } else if !insideWindow && isShielded && !verified {
+            // Missed intervalDidEnd.
+            removeShield()
+            GetuppShared.logBreadcrumb("Reconcile: missed intervalDidEnd — shield cleared")
+        }
     }
 
     // MARK: - Verification
 
-    /// Called when the user passes the photo check.
-    /// Writes today's date as lastVerifiedDate (calendar-day, local timezone),
-    /// then removes the shield immediately.
     func markVerified() {
-        // Store the exact timestamp. isVerifiedToday() uses Calendar.isDateInToday()
-        // which compares calendar days in the device's local timezone — not a 24h delta.
         GetuppShared.defaults?.set(Date(), forKey: GetuppShared.lastVerifiedDateKey)
         isVerifiedToday = true
         GetuppShared.logBreadcrumb("Verified — removing shield")
         removeShield()
     }
 
-    /// Debug helper: clears lastVerifiedDate so the next schedule window will re-block.
     func clearVerifiedDate() {
         GetuppShared.defaults?.removeObject(forKey: GetuppShared.lastVerifiedDateKey)
         isVerifiedToday = false
@@ -201,14 +277,11 @@ class ShieldManager: ObservableObject {
 
     // MARK: - Shielding
 
-    /// Applies shields to all selected apps and categories.
-    /// ManagedSettings shields are system-level — they persist even if GETUPP is killed.
     func applyShield() {
         GetuppShared.applyShield(selection: activitySelection)
         isShielded = true
     }
 
-    /// Removes all shields, unblocking every app immediately.
     func removeShield() {
         GetuppShared.removeShield()
         isShielded = false
@@ -216,42 +289,39 @@ class ShieldManager: ObservableObject {
 
     // MARK: - Persistence
 
-    /// Encodes the current selection as JSON and saves it to the shared App Group.
-    /// The App Group lets the Monitor and Shield extensions read the same data later.
     func saveSelection() {
-        guard let defaults = UserDefaults(suiteName: appGroupID) else {
-            print("[ShieldManager] Could not access App Group UserDefaults")
-            return
-        }
-        do {
-            let data = try JSONEncoder().encode(activitySelection)
-            defaults.set(data, forKey: selectionKey)
-        } catch {
-            print("[ShieldManager] Failed to save selection: \(error)")
-        }
+        guard let defaults = UserDefaults(suiteName: GetuppShared.appGroupID) else { return }
+        guard let data = try? JSONEncoder().encode(activitySelection) else { return }
+        defaults.set(data, forKey: GetuppShared.selectionKey)
     }
 
-    /// Loads a previously saved selection from the App Group. Returns nil if none exists.
     private func loadSelection() -> FamilyActivitySelection? {
-        guard let defaults = UserDefaults(suiteName: appGroupID),
-              let data = defaults.data(forKey: selectionKey) else { return nil }
-        do {
-            return try JSONDecoder().decode(FamilyActivitySelection.self, from: data)
-        } catch {
-            print("[ShieldManager] Failed to load selection: \(error)")
-            return nil
-        }
+        guard let data = GetuppShared.defaults?.data(forKey: GetuppShared.selectionKey) else { return nil }
+        return try? JSONDecoder().decode(FamilyActivitySelection.self, from: data)
     }
 
     // MARK: - Computed helpers
 
-    /// Number of individual app tokens selected.
-    var selectedAppCount: Int {
-        activitySelection.applicationTokens.count
+    var selectedAppCount:      Int { activitySelection.applicationTokens.count }
+    var selectedCategoryCount: Int { activitySelection.categoryTokens.count }
+
+    var isBlockedAndUnverified: Bool { isShielded && !isVerifiedToday }
+
+    // MARK: - Private helpers
+
+    /// Records today's window-end time as activeBlockEnd in the App Group.
+    private func recordActiveBlockEnd(for schedule: WakeSchedule, now: Date = Date()) {
+        let calendar = Calendar.current
+        var comps    = calendar.dateComponents([.year, .month, .day], from: now)
+        comps.hour   = schedule.endHour
+        comps.minute = schedule.endMinute
+        comps.second = 0
+        if let endDate = calendar.date(from: comps) {
+            GetuppShared.defaults?.set(endDate, forKey: GetuppShared.activeBlockEndKey)
+        }
     }
 
-    /// Number of category tokens selected (e.g. "Social", "Games").
-    var selectedCategoryCount: Int {
-        activitySelection.categoryTokens.count
+    private func formatTime(_ dc: DateComponents) -> String {
+        String(format: "%02d:%02d", dc.hour ?? 0, dc.minute ?? 0)
     }
 }

@@ -2,7 +2,9 @@
 //  ContentView.swift
 //  Getupp
 //
-//  Main screen state machine + throwaway debug controls.
+//  Main screen — two zones:
+//    USER ZONE  · Wake Window card + product state (above divider)
+//    DEBUG ZONE · Throwaway controls below the DEBUG divider
 //
 
 import FamilyControls
@@ -11,18 +13,25 @@ import SwiftUI
 struct ContentView: View {
 
     @EnvironmentObject var shieldManager: ShieldManager
+    @Environment(\.scenePhase) private var scenePhase
+
     @State private var isPickerPresented = false
-    @State private var breadcrumbs: [String] = []
+    @State private var showEditSheet     = false
+    @State private var breadcrumbs:  [String] = []
 
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 24) {
 
-                    // ── MAIN PRODUCT STATE ────────────────────────────────
+                    // ── USER ZONE ─────────────────────────────────────────────
                     mainStateSection
+                    wakeWindowCard
 
-                    // ── DEBUG CONTROLS ────────────────────────────────────
+                    // ── DEBUG DIVIDER ─────────────────────────────────────────
+                    debugDivider
+
+                    // ── DEBUG ZONE ────────────────────────────────────────────
                     debugSection
                 }
                 .padding()
@@ -30,6 +39,13 @@ struct ContentView: View {
             .navigationTitle("GETUPP")
             .onAppear {
                 breadcrumbs = GetuppShared.loadBreadcrumbs()
+                shieldManager.reconcileState()
+            }
+            .onChange(of: scenePhase) { phase in
+                if phase == .active {
+                    shieldManager.reconcileState()
+                    breadcrumbs = GetuppShared.loadBreadcrumbs()
+                }
             }
             .familyActivityPicker(
                 isPresented: $isPickerPresented,
@@ -38,15 +54,15 @@ struct ContentView: View {
             .onChange(of: shieldManager.activitySelection) { _ in
                 shieldManager.saveSelection()
             }
+            .sheet(isPresented: $showEditSheet) {
+                WakeWindowEditSheet(existing: shieldManager.wakeSchedule)
+                    .environmentObject(shieldManager)
+            }
         }
     }
 
-    // MARK: - Main state section
+    // MARK: - Main state section (user zone)
 
-    /// Three mutually exclusive states:
-    /// 1. Verified today → done screen
-    /// 2. Shielded and not verified → "take the photo" CTA
-    /// 3. Otherwise → idle (window hasn't started yet, or manual block)
     @ViewBuilder
     private var mainStateSection: some View {
         if shieldManager.isVerifiedToday {
@@ -100,7 +116,7 @@ struct ContentView: View {
                 Text("No active block window.")
                     .font(.headline)
                     .foregroundColor(.secondary)
-                Text("Use the debug controls below to test the full flow.")
+                Text("Set your wake window below to arm the shield.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -110,14 +126,67 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Wake Window card (user zone)
+
+    private var wakeWindowCard: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("WAKE WINDOW")
+                    .font(.caption.uppercaseSmallCaps())
+                    .foregroundColor(.secondary)
+
+                if let schedule = shieldManager.wakeSchedule {
+                    Text(schedule.summaryLine)
+                        .font(.headline)
+
+                    HStack {
+                        Text("Monitoring:")
+                        Spacer()
+                        Text(shieldManager.isMonitoring ? "Active" : "Off")
+                            .bold()
+                            .foregroundColor(shieldManager.isMonitoring ? .green : .secondary)
+                    }
+
+                    if let err = shieldManager.scheduleError {
+                        Text("Error: \(err)")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+
+                    Button("Edit Window") { showEditSheet = true }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(shieldManager.authorizationStatus != .approved)
+                } else {
+                    Text("No window set.")
+                        .foregroundColor(.secondary)
+
+                    Button("Set Wake Window") { showEditSheet = true }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(shieldManager.authorizationStatus != .approved)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+        }
+    }
+
+    // MARK: - Debug divider
+
+    private var debugDivider: some View {
+        HStack {
+            Rectangle().frame(height: 1).foregroundColor(.secondary.opacity(0.3))
+            Text("DEBUG")
+                .font(.caption.uppercaseSmallCaps())
+                .foregroundColor(.secondary)
+                .fixedSize()
+            Rectangle().frame(height: 1).foregroundColor(.secondary.opacity(0.3))
+        }
+    }
+
     // MARK: - Debug section
 
     private var debugSection: some View {
         VStack(spacing: 16) {
-            Text("Debug")
-                .font(.caption.uppercaseSmallCaps())
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
 
             // Authorization
             GroupBox("Authorization") {
@@ -192,15 +261,12 @@ struct ContentView: View {
                             .foregroundColor(shieldManager.isVerifiedToday ? .green : .secondary)
                     }
                     HStack(spacing: 12) {
-                        // Go to camera (always accessible for testing)
                         NavigationLink(destination: CameraView()) {
                             Label("Verify", systemImage: "camera.fill")
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.indigo)
 
-                        // Simulate next-morning reset: clears lastVerifiedDate so next
-                        // schedule window will re-block as if it's a new day.
                         Button("Clear Verified") {
                             shieldManager.clearVerifiedDate()
                         }
@@ -212,7 +278,7 @@ struct ContentView: View {
                 .padding(.vertical, 4)
             }
 
-            // Schedule
+            // Schedule debug (Stop Schedule + Debug Window)
             GroupBox("Schedule") {
                 VStack(spacing: 12) {
                     HStack {

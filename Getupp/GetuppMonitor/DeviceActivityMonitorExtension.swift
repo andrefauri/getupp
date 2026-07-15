@@ -2,9 +2,9 @@
 //  DeviceActivityMonitorExtension.swift
 //  GetuppMonitor
 //
-//  Apple calls these callbacks when the schedule window starts and ends.
-//  The extension runs as a separate process — it cannot talk to the main app
-//  directly; it communicates only through App Group UserDefaults.
+//  Apple calls these callbacks when a schedule window starts and ends.
+//  This extension runs as a separate process — it communicates with the main app
+//  only through App Group UserDefaults.
 //
 
 import DeviceActivity
@@ -16,29 +16,43 @@ class DeviceActivityMonitorExtension: DeviceActivityMonitor {
     override func intervalDidStart(for activity: DeviceActivityName) {
         super.intervalDidStart(for: activity)
 
-        GetuppShared.logBreadcrumb("intervalDidStart fired")
+        GetuppShared.logBreadcrumb("intervalDidStart — \(activity.rawValue)")
 
-        // Skip shielding if the user already verified (got out of bed) today.
-        // This is the daily-reset gate — verification will fill lastVerifiedDate later.
+        // Skip if the user already verified today (daily-reset gate).
         if GetuppShared.isVerifiedToday() {
             GetuppShared.logBreadcrumb("Already verified today — skipping shield")
             return
         }
 
-        // Load the selection the user saved from the picker, then apply shields.
-        if let selection = GetuppShared.loadSelection() {
-            GetuppShared.applyShield(selection: selection)
-            GetuppShared.logBreadcrumb("Shield applied (apps: \(selection.applicationTokens.count), categories: \(selection.categoryTokens.count))")
-        } else {
-            GetuppShared.logBreadcrumb("No saved selection found — nothing to shield")
+        // Skip if the user chose "Start tomorrow" today (Case A exempt).
+        if GetuppShared.isExemptToday() {
+            GetuppShared.logBreadcrumb("Exempt today — skipping shield")
+            return
+        }
+
+        // Apply shields.
+        guard let selection = GetuppShared.loadSelection() else {
+            GetuppShared.logBreadcrumb("No saved selection — nothing to shield")
+            return
+        }
+
+        GetuppShared.applyShield(selection: selection)
+        GetuppShared.logBreadcrumb("Shield applied (apps: \(selection.applicationTokens.count), categories: \(selection.categoryTokens.count))")
+
+        // Record when this block expires so the app can reconcile correctly,
+        // and so schedule edits during a block (Case B) don't change the end time.
+        if let schedule = GetuppShared.loadWakeSchedule() {
+            GetuppShared.recordActiveBlockEnd(from: schedule)
+            GetuppShared.logBreadcrumb("activeBlockEnd set to \(schedule.endDisplayString)")
         }
     }
 
     override func intervalDidEnd(for activity: DeviceActivityName) {
         super.intervalDidEnd(for: activity)
 
-        GetuppShared.logBreadcrumb("intervalDidEnd fired — removing shield")
+        GetuppShared.logBreadcrumb("intervalDidEnd — \(activity.rawValue) — removing shield")
         GetuppShared.removeShield()
+        // removeShield() already clears activeBlockEndKey.
     }
 
     // Unused stubs — required by the superclass.

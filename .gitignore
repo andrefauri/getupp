@@ -1,5 +1,6 @@
 # Secrets
 photo-eval/.env
+Getupp/Getupp/Secrets.plist
 
 # Photos (local test set — ground truth data)
 photo-eval/photos/

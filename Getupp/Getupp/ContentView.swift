@@ -142,6 +142,17 @@ struct ContentView: View {
                     .padding(.vertical, 4)
                 }
 
+                // -- Verification --
+                GroupBox("Verification") {
+                    NavigationLink(destination: CameraView()) {
+                        Label("Verify I'm Out of Bed", systemImage: "camera.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.indigo)
+                    .padding(.vertical, 4)
+                }
+
                 // -- Extension breadcrumbs --
                 GroupBox("Extension Log") {
                     VStack(alignment: .leading, spacing: 6) {

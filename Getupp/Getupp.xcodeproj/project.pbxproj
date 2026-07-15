@@ -70,11 +70,21 @@
 			);
 			target = DF27513B3006BF0500093885 /* GetuppShield */;
 		};
+		DF2751523007AA7900093885 /* Exceptions for "Getupp" folder in "GetuppMonitor" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				GetuppShared.swift,
+			);
+			target = DF2751263006BEC600093885 /* GetuppMonitor */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		DF2751163006B98800093885 /* Getupp */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				DF2751523007AA7900093885 /* Exceptions for "Getupp" folder in "GetuppMonitor" target */,
+			);
 			path = Getupp;
 			sourceTree = "<group>";
 		};
@@ -462,6 +472,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSCameraUsageDescription = "GETUPP needs the camera to verify you're actually out of bed.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -510,6 +521,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSCameraUsageDescription = "GETUPP needs the camera to verify you're actually out of bed.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;

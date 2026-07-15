@@ -27,6 +27,7 @@ struct ContentView: View {
                     // ── USER ZONE ─────────────────────────────────────────────
                     mainStateSection
                     wakeWindowCard
+                    appSelectionCard
 
                     // ── DEBUG DIVIDER ─────────────────────────────────────────
                     debugDivider
@@ -170,6 +171,34 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - App Selection card (user zone)
+
+    private var appSelectionCard: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("APPS TO BLOCK")
+                    .font(.caption.uppercaseSmallCaps())
+                    .foregroundColor(.secondary)
+
+                HStack {
+                    Text("Apps selected:")
+                    Spacer()
+                    Text("\(shieldManager.selectedAppCount)").monospacedDigit()
+                }
+                HStack {
+                    Text("Categories selected:")
+                    Spacer()
+                    Text("\(shieldManager.selectedCategoryCount)").monospacedDigit()
+                }
+                Button("Choose Apps to Block") { isPickerPresented = true }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(shieldManager.authorizationStatus != .approved)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+        }
+    }
+
     // MARK: - Debug divider
 
     private var debugDivider: some View {
@@ -203,26 +232,6 @@ struct ContentView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(shieldManager.authorizationStatus == .approved)
-                }
-                .padding(.vertical, 4)
-            }
-
-            // App selection
-            GroupBox("App Selection") {
-                VStack(spacing: 12) {
-                    HStack {
-                        Text("Apps selected:")
-                        Spacer()
-                        Text("\(shieldManager.selectedAppCount)").monospacedDigit()
-                    }
-                    HStack {
-                        Text("Categories selected:")
-                        Spacer()
-                        Text("\(shieldManager.selectedCategoryCount)").monospacedDigit()
-                    }
-                    Button("Choose Apps to Block") { isPickerPresented = true }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(shieldManager.authorizationStatus != .approved)
                 }
                 .padding(.vertical, 4)
             }

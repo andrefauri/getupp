@@ -13,18 +13,22 @@ import UIKit
 // MARK: - Verification state
 
 enum VerificationState {
-    case idle               // waiting to take photo
-    case previewing(UIImage)  // photo taken, ready to send
-    case loading            // API call in progress
-    case result(VerificationResult)
-    case error(String)
+    case idle                       // waiting to take photo
+    case previewing(UIImage)        // photo taken, ready to send
+    case loading                    // API call in progress
+    case pass(VerificationResult)   // verified — out of bed
+    case fail(VerificationResult)   // not verified — still in bed
+    case error(String)              // network/API/parse failure (distinct from "in bed")
 }
 
 // MARK: - Top-level SwiftUI view
 
 struct CameraView: View {
 
-    @State private var capturedImage: UIImage?
+    // Injected from the environment so we can call markVerified() on pass.
+    @EnvironmentObject var shieldManager: ShieldManager
+    @Environment(\.presentationMode) var presentationMode
+
     @State private var state: VerificationState = .idle
 
     private let service = VerificationService()
@@ -43,8 +47,11 @@ struct CameraView: View {
             case .loading:
                 loadingView
 
-            case .result(let result):
-                resultView(result: result)
+            case .pass(let result):
+                passView(result: result)
+
+            case .fail(let result):
+                failView(result: result)
 
             case .error(let message):
                 errorView(message: message)
@@ -58,15 +65,13 @@ struct CameraView: View {
     // MARK: - Idle: live camera preview + shutter
 
     private var idleView: some View {
-        VStack(spacing: 0) {
-            CameraPreview(onCapture: { image in
-                state = .previewing(image)
-            })
-            .ignoresSafeArea(edges: .top)
-        }
+        CameraPreview(onCapture: { image in
+            state = .previewing(image)
+        })
+        .ignoresSafeArea()
     }
 
-    // MARK: - Preview: show captured frame, confirm to send
+    // MARK: - Preview: confirm before sending
 
     private func previewView(image: UIImage) -> some View {
         VStack(spacing: 24) {
@@ -103,36 +108,73 @@ struct CameraView: View {
         }
     }
 
-    // MARK: - Result
+    // MARK: - Pass
 
-    private func resultView(result: VerificationResult) -> some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                Text(result.outOfBed ? "PASS" : "FAIL")
-                    .font(.system(size: 72, weight: .black))
-                    .foregroundColor(result.outOfBed ? .green : .red)
+    private func passView(result: VerificationResult) -> some View {
+        VStack(spacing: 20) {
+            Text("YOU'RE UP.")
+                .font(.system(size: 52, weight: .black))
+                .foregroundColor(.green)
 
-                Text(String(format: "Confidence: %.0f%%", result.confidence * 100))
-                    .font(.headline)
-                    .foregroundColor(.white)
+            Text("Apps unblocked.")
+                .font(.title2.bold())
+                .foregroundColor(.white)
 
-                Text(result.reason)
-                    .font(.body)
-                    .foregroundColor(.white.opacity(0.85))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
+            Text(String(format: "Confidence: %.0f%%", result.confidence * 100))
+                .font(.subheadline)
+                .foregroundColor(.white.opacity(0.7))
 
-                Button("Try Again") {
-                    state = .idle
-                }
-                .buttonStyle(.borderedProminent)
-                .padding(.top, 8)
+            Text(result.reason)
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.5))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
+            Button("Done") {
+                // Navigate back to the main screen.
+                presentationMode.wrappedValue.dismiss()
             }
-            .padding(.vertical, 40)
+            .buttonStyle(.borderedProminent)
+            .tint(.green)
+            .padding(.top, 8)
         }
+        .padding()
     }
 
-    // MARK: - Error
+    // MARK: - Fail
+
+    private func failView(result: VerificationResult) -> some View {
+        VStack(spacing: 20) {
+            Text("NOPE.")
+                .font(.system(size: 64, weight: .black))
+                .foregroundColor(.red)
+
+            Text("Still looks like you're in bed.")
+                .font(.title3.bold())
+                .foregroundColor(.white)
+
+            // Show the model's reason — this becomes retry coaching in v2.
+            Text(result.reason)
+                .font(.body)
+                .foregroundColor(.white.opacity(0.8))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
+            Text(String(format: "Confidence: %.0f%%", result.confidence * 100))
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.5))
+
+            Button("Try Again") {
+                state = .idle
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.red)
+            .padding(.top, 8)
+        }
+        .padding()
+    }
+
+    // MARK: - Error (network/API/parse — distinct from "you're in bed")
 
     private func errorView(message: String) -> some View {
         VStack(spacing: 20) {
@@ -140,15 +182,20 @@ struct CameraView: View {
                 .font(.system(size: 48))
                 .foregroundColor(.yellow)
 
-            Text("Error")
+            Text("Couldn't verify")
                 .font(.title.bold())
                 .foregroundColor(.white)
 
+            // Clearly different from "you're in bed" — the system failed, not the user.
             Text(message)
                 .font(.callout)
                 .foregroundColor(.white.opacity(0.8))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
+
+            Text("Apps stay blocked (fail-closed).")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.5))
 
             Button("Try Again") {
                 state = .idle
@@ -164,9 +211,16 @@ struct CameraView: View {
         state = .loading
         do {
             let result = try await service.verify(image: image)
-            state = .result(result)
+            if result.outOfBed {
+                // PASS: write lastVerifiedDate and clear the shield.
+                shieldManager.markVerified()
+                state = .pass(result)
+            } else {
+                // FAIL: shield stays, do not touch lastVerifiedDate.
+                state = .fail(result)
+            }
         } catch let e as VerificationError {
-            // Fail-closed: any error = not verified. Show the error clearly.
+            // System error — fail-closed, shield stays.
             state = .error(errorMessage(for: e))
         } catch {
             state = .error(error.localizedDescription)

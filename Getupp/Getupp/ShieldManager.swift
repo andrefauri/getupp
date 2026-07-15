@@ -31,6 +31,11 @@ class ShieldManager: ObservableObject {
         didSet { saveSelection() }
     }
 
+    // MARK: - Published properties (verification state)
+
+    /// Whether the user has verified (passed photo check) today.
+    @Published var isVerifiedToday: Bool
+
     // MARK: - Published properties (shield state)
 
     /// Whether shields are currently active. Persisted so the UI reflects reality after restart.
@@ -67,13 +72,21 @@ class ShieldManager: ObservableObject {
         // Must be initialized before loadSelection() below — Swift requires all stored
         // properties to be set before any self method is called.
         let defaults = UserDefaults(suiteName: GetuppShared.appGroupID)
-        self.isShielded   = defaults?.bool(forKey: GetuppShared.shieldedKey)    ?? false
-        self.isMonitoring = defaults?.bool(forKey: GetuppShared.isMonitoringKey) ?? false
-        self.scheduleStart = nil
-        self.scheduleEnd   = nil
+        self.isShielded      = defaults?.bool(forKey: GetuppShared.shieldedKey)    ?? false
+        self.isMonitoring    = defaults?.bool(forKey: GetuppShared.isMonitoringKey) ?? false
+        self.isVerifiedToday = GetuppShared.isVerifiedToday()
+        self.scheduleStart   = nil
+        self.scheduleEnd     = nil
 
         // Restore any selection the user made in a previous session.
         self.activitySelection = loadSelection() ?? FamilyActivitySelection()
+
+        // Reconciliation: if user passed verification today but shield is still active
+        // (e.g. app was killed between pass and removeShield), clear it now.
+        if self.isVerifiedToday && self.isShielded {
+            GetuppShared.removeShield()
+            self.isShielded = false
+        }
 
         // AuthorizationCenter loads its true status asynchronously after launch.
         // This subscription catches that update and any future changes (e.g. user
@@ -163,6 +176,27 @@ class ShieldManager: ObservableObject {
         let h = dc.hour ?? 0
         let m = dc.minute ?? 0
         return String(format: "%02d:%02d", h, m)
+    }
+
+    // MARK: - Verification
+
+    /// Called when the user passes the photo check.
+    /// Writes today's date as lastVerifiedDate (calendar-day, local timezone),
+    /// then removes the shield immediately.
+    func markVerified() {
+        // Store the exact timestamp. isVerifiedToday() uses Calendar.isDateInToday()
+        // which compares calendar days in the device's local timezone — not a 24h delta.
+        GetuppShared.defaults?.set(Date(), forKey: GetuppShared.lastVerifiedDateKey)
+        isVerifiedToday = true
+        GetuppShared.logBreadcrumb("Verified — removing shield")
+        removeShield()
+    }
+
+    /// Debug helper: clears lastVerifiedDate so the next schedule window will re-block.
+    func clearVerifiedDate() {
+        GetuppShared.defaults?.removeObject(forKey: GetuppShared.lastVerifiedDateKey)
+        isVerifiedToday = false
+        GetuppShared.logBreadcrumb("Debug: cleared lastVerifiedDate")
     }
 
     // MARK: - Shielding

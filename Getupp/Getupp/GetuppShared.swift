@@ -33,6 +33,12 @@ enum GetuppShared {
     // activeBlockEnd: the wall-clock time when the current block expires.
     // Persists through schedule edits (Case B) so the original end time is honoured.
     static let activeBlockEndKey   = "activeBlockEnd"
+    // appEnabled: Pull the Plug's on/off switch. ABSENT means true — a fresh
+    // install (or any build before this feature shipped) is enabled by default.
+    static let appEnabledKey       = "appEnabled"
+    // emergencyBreaksUsed: lifetime stat, mirrors totalTimeoutMinutes. Emergency
+    // Break only — Pull the Plug does not increment this.
+    static let emergencyBreaksUsedKey = "emergencyBreaksUsed"
 
     // DeviceActivityName namespace.
     // Legacy name kept so any previously registered activity can be stopped cleanly.
@@ -148,6 +154,25 @@ enum GetuppShared {
         saveDayLog(log)
     }
 
+    /// Main app write: marks today's Escape Hatch action as a surrendered day.
+    /// Used by BOTH Emergency Break and Pull the Plug — either one breaks the
+    /// streak the same way. deriveStreak() already treats emergencyUsed as
+    /// .broken; this is the one place that sets it.
+    static func markEmergencyUsedToday(now: Date = Date()) {
+        let key = todayKey(now: now)
+        var log = loadDayLog()
+        if let index = log.firstIndex(where: { $0.date == key }) {
+            log[index].emergencyUsed = true
+            log[index].emergencyAt   = now
+        } else {
+            var record = DayRecord.fresh(date: key, wasScheduled: true)
+            record.emergencyUsed = true
+            record.emergencyAt   = now
+            log.append(record)
+        }
+        saveDayLog(log)
+    }
+
     /// Snapshots whether today counts as scheduled, so retroactive schedule edits
     /// can't rewrite history (anti-gaming rule #1). Called once per day, on first
     /// app open — first write wins, later calls are no-ops for today's record.
@@ -193,7 +218,7 @@ enum GetuppShared {
     /// Convenience: backfills, then derives the current streak.
     /// timeoutDuration comes from the Timeout feature: today stays .pending until
     /// the post-verification timeout completes, then the +1 lands.
-    /// appEnabled = true (disable-breaks-streak not wired yet).
+    /// appEnabled reads the real Pull the Plug switch — disabling zeroes the streak.
     static func currentStreak(schedule: WakeSchedule?, now: Date = Date()) -> StreakResult {
         backfillDayLog(schedule: schedule, now: now)
 
@@ -209,14 +234,49 @@ enum GetuppShared {
             now: now,
             windowEnd: windowEnd,
             timeoutDuration: Timeout.effectiveStreakDuration(now: now),
-            appEnabled: true
+            appEnabled: isAppEnabled()
         )
+    }
+
+    // MARK: - Pull the Plug (appEnabled)
+
+    /// Whether GETUPP is currently active. ABSENT means true (fresh install,
+    /// or any build predating this feature, is enabled by default).
+    static func isAppEnabled() -> Bool {
+        guard let value = defaults?.object(forKey: appEnabledKey) as? Bool else { return true }
+        return value
+    }
+
+    static func setAppEnabled(_ enabled: Bool) {
+        defaults?.set(enabled, forKey: appEnabledKey)
+    }
+
+    // MARK: - Emergency Break lifetime stat
+
+    /// Lifetime count of Emergency Breaks used. Pull the Plug does NOT increment
+    /// this — it's a separate "give up" action with its own semantics.
+    static var emergencyBreaksUsed: Int {
+        defaults?.integer(forKey: emergencyBreaksUsedKey) ?? 0
+    }
+
+    static func incrementEmergencyBreaksUsed() {
+        defaults?.set(emergencyBreaksUsed + 1, forKey: emergencyBreaksUsedKey)
     }
 
     // MARK: - Shielding
 
     /// Applies shields to the given selection's apps and categories.
+    ///
+    /// shieldedKey only becomes true when there's actually something to
+    /// shield — it's the one flag every reconcile/UI path trusts to mean
+    /// "the OS is really restricting something," so it must never claim a
+    /// block that isn't happening. An empty selection sets both shield
+    /// properties to nil (correctly, nothing to restrict) but must NOT also
+    /// mark shieldedKey true, or Home would show "Apps are blocked" while
+    /// nothing is actually blocked.
     static func applyShield(selection: FamilyActivitySelection) {
+        let hasSomethingToShield = !selection.applicationTokens.isEmpty || !selection.categoryTokens.isEmpty
+
         store.shield.applications = selection.applicationTokens.isEmpty
             ? nil
             : selection.applicationTokens
@@ -225,7 +285,10 @@ enum GetuppShared {
             ? nil
             : .specific(selection.categoryTokens)
 
-        defaults?.set(true, forKey: shieldedKey)
+        defaults?.set(hasSomethingToShield, forKey: shieldedKey)
+        if !hasSomethingToShield {
+            logBreadcrumb("applyShield called with empty selection — not marking shielded")
+        }
     }
 
     /// Removes all shields, unblocking everything.

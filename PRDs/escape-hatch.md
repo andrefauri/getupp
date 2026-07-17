@@ -1,6 +1,5 @@
 # Escape Hatch — Spec (Emergency Break + Pull the Plug)
 
-**Status:** Ready for implementation
 **Tier:** Production-tier (same tier as blocking module and Timeout — state logic and Family Controls behavior survive into production)
 **Depends on:** Timeout (implemented), Streak (implemented), Family Controls blocking module
 
@@ -277,9 +276,9 @@ All strings live in a new `EscapeHatchCopy.swift` following the `TimeoutCopy.swi
 - **No new stored state beyond:** `appEnabled` (Bool), `emergencyBreaksUsed` (Int), copy last-index keys, and the day-log records. Everything else stays derived.
 - **Self-tests:** extend the DEBUG self-test harness pattern — pure-logic tests for the `appEnabled` guards and the no-credit wipe rule, runnable from ContentView's debug section (no XCTest target exists).
 - **After implementing:** tell André exactly what to rebuild (Cmd+R) and a device test script: (1) break mid-window, (2) break mid-timeout offline in airplane mode, (3) plug pull + relaunch + wait for window start, (4) re-enable mid-window, (5) cancel paths, (6) countdown tap-early.
+- Display `emergencyBreaksUsed` on a tiny line in Settings.
 
-## Open questions
+## Questions
 
-- **[André, non-blocking]** Should `emergencyBreaksUsed` show anywhere in v1 (e.g., tiny line in Settings), or stay invisible until a stats screen exists? Default if unanswered: invisible.
 - **[Claude Code audit, blocking]** Does the `appEnabled` streak hook already exist in `deriveStreak()`, or does it ship with this spec? The audit determines whether step 4 of Pull the Plug is "wire existing" or "build new."
 - **[Device test, non-blocking]** Whether the celebration animation performs acceptably on André's device — if janky, ship the copy line alone and polish in P1.

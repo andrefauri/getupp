@@ -15,12 +15,16 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var showStreakDialog = false
+    @State private var showWelcomeBack  = false
+    @State private var welcomeBackLine  = ""
 
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 24) {
-                    streakCard
+                    if shieldManager.appEnabled {
+                        streakCard
+                    }
                     mainStateSection
                     settingsButton
                 }
@@ -40,6 +44,13 @@ struct ContentView: View {
                     streakCount: shieldManager.streak.count,
                     totalTimeoutMinutes: shieldManager.totalTimeoutMinutes
                 )
+            }
+            // Escape Hatch confirmation flow — attached at root so both entry
+            // doors (the hub, and the reserved TimeoutCountdownView slot) can
+            // open it from anywhere by setting shieldManager.activeEscape.
+            .fullScreenCover(item: $shieldManager.activeEscape) { action in
+                EscapeConfirmationView(action: action)
+                    .environmentObject(shieldManager)
             }
         }
     }
@@ -76,7 +87,9 @@ struct ContentView: View {
 
     @ViewBuilder
     private var mainStateSection: some View {
-        if shieldManager.timeoutEndTime != nil {
+        if !shieldManager.appEnabled {
+            disabledView
+        } else if shieldManager.timeoutEndTime != nil {
             timeoutView
         } else if shieldManager.isVerifiedToday {
             verifiedTodayView
@@ -84,6 +97,37 @@ struct ContentView: View {
             needsVerificationView
         } else {
             idleView
+        }
+    }
+
+    // MARK: - Pull the Plug disabled state
+
+    /// When appEnabled == false, this replaces the whole main state section —
+    /// nothing else competes with the one re-enable button.
+    private var disabledView: some View {
+        GroupBox {
+            VStack(spacing: 16) {
+                Text(EscapeHatchCopy.homeDisabledStatement)
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+
+                Button(EscapeHatchCopy.homeDisabledButton) {
+                    shieldManager.turnBackOn()
+                    welcomeBackLine = EscapeHatchCopy.line(for: .welcomeBack)
+                    showWelcomeBack = true
+                }
+                .buttonStyle(.acidYellow)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+        }
+        .overlay {
+            if showWelcomeBack {
+                WelcomeBackOverlay(line: welcomeBackLine) {
+                    showWelcomeBack = false
+                }
+            }
         }
     }
 
@@ -149,11 +193,44 @@ struct ContentView: View {
     // MARK: - Settings entry point
 
     private var settingsButton: some View {
-        NavigationLink(destination: SettingsView()) {
+        // isActive-bound so Escape Hatch (pushed underneath Settings) can pop
+        // the WHOLE stack back to Home in one shot by flipping this false —
+        // see ShieldManager.settingsPresented and EscapeConfirmationView.
+        NavigationLink(destination: SettingsView(), isActive: $shieldManager.settingsPresented) {
             Label("Settings", systemImage: "gearshape.fill")
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.bordered)
+    }
+}
+
+// MARK: - Welcome-back celebration (P1: simple burst is fine, don't block ship)
+
+/// Minimal celebration for re-enabling: one emoji burst + a welcome-back line,
+/// auto-dismisses. Animation polish is P1 — if this reads as janky on-device,
+/// keep the copy line alone per the PRD's fallback.
+private struct WelcomeBackOverlay: View {
+    let line: String
+    let onFinished: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("🎉")
+                .font(.system(size: 56))
+            Text(line)
+                .font(.headline)
+                .multilineTextAlignment(.center)
+                .foregroundColor(.primary)
+        }
+        .padding(24)
+        .background(.thinMaterial)
+        .cornerRadius(16)
+        .transition(.scale.combined(with: .opacity))
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                onFinished()
+            }
+        }
     }
 }
 

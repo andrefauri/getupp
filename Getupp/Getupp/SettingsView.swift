@@ -24,6 +24,7 @@ struct SettingsView: View {
                 wakeWindowCard
                 timeoutCard
                 appSelectionCard
+                escapeHatchRow
 
                 #if DEBUG
                 internalToolsButton
@@ -193,6 +194,32 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 8)
+        }
+    }
+
+    // MARK: - Escape Hatch entry point
+
+    private var escapeHatchRow: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                NavigationLink(destination: EscapeHatchView()) {
+                    HStack {
+                        Text("Escape Hatch")
+                            .font(.headline)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                if shieldManager.emergencyBreaksUsed > 0 {
+                    Text("Emergency breaks used: \(shieldManager.emergencyBreaksUsed)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
         }
     }
 

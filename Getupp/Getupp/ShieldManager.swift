@@ -61,6 +61,25 @@ class ShieldManager: ObservableObject {
     /// Non-nil when the last schedule registration failed.
     @Published var scheduleError: String?
 
+    // MARK: - Published properties (Escape Hatch)
+
+    /// Pull the Plug's on/off switch. Mirrors GetuppShared.isAppEnabled().
+    @Published var appEnabled: Bool
+
+    /// Lifetime Emergency Break count (mirrors the App Group key).
+    @Published var emergencyBreaksUsed: Int
+
+    /// Non-nil while an Escape Hatch confirmation cover should be showing.
+    /// Set by EscapeHatchView rows and the TimeoutCountdownView entry point;
+    /// both doors open the same flow.
+    @Published var activeEscape: EscapeAction?
+
+    /// Drives ContentView's Settings NavigationLink. Escape Hatch lives behind
+    /// Settings, but both its Cancel and post-confirmation CTA must land on
+    /// Home, not just pop one level — so we bind the top of the stack here and
+    /// flip it false to unwind the whole subtree at once.
+    @Published var settingsPresented = false
+
     // For debug display only — shows the currently registered window times.
     @Published var scheduleStart: DateComponents?
     @Published var scheduleEnd:   DateComponents?
@@ -87,6 +106,12 @@ class ShieldManager: ObservableObject {
         self.timeoutDuration        = Timeout.currentDuration
         self.pendingTimeoutDuration = Timeout.pendingDuration
 
+        self.appEnabled          = GetuppShared.isAppEnabled()
+        self.emergencyBreaksUsed = GetuppShared.emergencyBreaksUsed
+
+        // All stored properties must be initialized before any instance method
+        // call (loadSelection() below) — this must come after every other
+        // `self.x = ...` assignment in this initializer.
         self.activitySelection = loadSelection() ?? FamilyActivitySelection()
 
         // If the user verified but the shield is still up (app was killed mid-flow),
@@ -249,6 +274,15 @@ class ShieldManager: ObservableObject {
     func reconcileState() {
         let now      = Date()
         let defaults = GetuppShared.defaults
+
+        // Pull the Plug guard: a disabled GETUPP must never re-shield
+        // "helpfully." Bail before any daily-maintenance or shield logic runs —
+        // everything below this line assumes the app is live.
+        guard GetuppShared.isAppEnabled() else {
+            appEnabled = false
+            return
+        }
+        appEnabled = true
 
         // Timeout daily maintenance first (clearing layer 2 — check-on-open):
         // completes an elapsed timeout (credits minutes, clears shields) and
@@ -442,16 +476,95 @@ class ShieldManager: ObservableObject {
         isShielded = false
     }
 
-    /// Debug emergency unlock (offline-lockout safety net — must always work).
-    /// Wipes the running timeout WITHOUT crediting minutes, then unshields.
-    /// Plain removeShield() isn't enough mid-timeout: reconcileState would see
-    /// timeoutEndTime still set and immediately re-shield.
-    func debugEmergencyUnlock() {
+    /// The shared no-credit wipe path. Wipes any running timeout WITHOUT
+    /// crediting minutes, then unshields. Plain removeShield() isn't enough
+    /// mid-timeout: reconcileState would see timeoutEndTime still set and
+    /// immediately re-shield. Both the debug button and the real Escape Hatch
+    /// actions (Emergency Break, Pull the Plug) call this — one wipe path,
+    /// never duplicated.
+    private func wipeTimeoutAndUnshield() {
         Timeout.clearAllTimeoutState()
         timeoutEndTime = nil
         DeviceActivityCenter().stopMonitoring([GetuppShared.timeoutActivityName])
         removeShield()
+    }
+
+    /// Debug emergency unlock (offline-lockout safety net — must always work).
+    func debugEmergencyUnlock() {
+        wipeTimeoutAndUnshield()
         GetuppShared.logBreadcrumb("Debug emergency unlock — timeout cleared, shield removed")
+    }
+
+    // MARK: - Escape Hatch
+
+    /// One-day surrender. Works in BOTH blocked phases (morning window
+    /// unverified, or verified-but-in-timeout) and must work fully offline —
+    /// everything here is local App Group + ManagedSettings, no network calls
+    /// anywhere in this path.
+    ///
+    /// markExemptToday() is required here, not decorative: unlike a normal
+    /// morning (which sets isVerifiedToday) or Pull the Plug (which short-
+    /// circuits reconcileState via appEnabled), clearing the shield alone
+    /// leaves nothing telling reconcileState() "today is already handled."
+    /// Without it, reconcileState — which re-runs almost immediately, since
+    /// dismissing the confirmation's fullScreenCover re-triggers ContentView's
+    /// onAppear — sees "inside window, unverified, not exempt, not shielded"
+    /// and reads that as a missed intervalDidStart, re-applying the shield
+    /// within the same second. Reusing exemptDate is exactly right: it means
+    /// "don't shield again today," which is precisely the one-day-surrender
+    /// contract, and it auto-clears at midnight so tomorrow's window is
+    /// untouched.
+    func emergencyBreak() {
+        wipeTimeoutAndUnshield()
+        markExemptToday()
+        GetuppShared.markEmergencyUsedToday()
+        GetuppShared.incrementEmergencyBreaksUsed()
+        emergencyBreaksUsed = GetuppShared.emergencyBreaksUsed
+        refreshStreak()
+        // Deliberately NOT touching the schedule — tomorrow's window fires
+        // normally. This is a one-day surrender, not a pause.
+        GetuppShared.logBreadcrumb("Emergency Break confirmed — apps unblocked for today")
+    }
+
+    /// Full surrender. Stops all monitoring, clears any shield, and flips
+    /// appEnabled off. Deletes nothing — selection, wake window, timeout
+    /// duration, and any queued downgrade all survive untouched.
+    func pullThePlug() {
+        stopMonitoring()
+        wipeTimeoutAndUnshield()
+        GetuppShared.setAppEnabled(false)
+        appEnabled = false
+
+        // Also write the broken DayRecord, not just appEnabled=false. appEnabled
+        // only zeroes the streak WHILE disabled (see deriveStreak's early return);
+        // the broken record is what stops the backward walk after re-enable, so
+        // successes from before Pull the Plug can't resurrect the old streak
+        // ("no backdating"). Looks redundant with appEnabled=false — isn't.
+        GetuppShared.markEmergencyUsedToday()
+
+        refreshStreak()
+        GetuppShared.logBreadcrumb("Pull the Plug confirmed — GETUPP disabled")
+    }
+
+    /// Frictionless re-enable. No confirmation, no countdown. Restores the
+    /// last-saved schedule and re-registers monitoring for the NEXT window.
+    ///
+    /// markExemptToday() looks like a leftover debug call — it isn't. Without
+    /// it, re-enabling mid-window would let reconcileState (or a missed
+    /// intervalDidStart) shield the user again THIS window, which is a hostile
+    /// re-onboarding (shielding someone at 2pm the moment they turn it back
+    /// on). Today is a wash; blocking resumes at the next intervalDidStart.
+    func turnBackOn() {
+        GetuppShared.setAppEnabled(true)
+        appEnabled = true
+        markExemptToday()
+
+        if let schedule = wakeSchedule {
+            saveWakeSchedule(schedule)
+        }
+
+        refreshStreak()
+        GetuppShared.logBreadcrumb("Turned back on — schedule re-registered, today exempt")
     }
 
     // MARK: - Persistence
@@ -473,6 +586,38 @@ class ShieldManager: ObservableObject {
     var selectedCategoryCount: Int { activitySelection.categoryTokens.count }
 
     var isBlockedAndUnverified: Bool { isShielded && !isVerifiedToday }
+
+    /// Derived, never stored — same principle as Timeout.swift. Used by
+    /// EscapeHatchView to disable the Emergency Break row when there's nothing
+    /// to escape from (.free / .preWindow).
+    var currentPhase: Timeout.Phase {
+        let now = Date()
+        var windowStart: Date?
+        var windowEnd: Date?
+
+        if let schedule = wakeSchedule {
+            let calendar = Calendar.current
+            var startComps = calendar.dateComponents([.year, .month, .day], from: now)
+            startComps.hour   = schedule.startHour
+            startComps.minute = schedule.startMinute
+            startComps.second = 0
+            windowStart = calendar.date(from: startComps)
+
+            var endComps = calendar.dateComponents([.year, .month, .day], from: now)
+            endComps.hour   = schedule.endHour
+            endComps.minute = schedule.endMinute
+            endComps.second = 0
+            windowEnd = calendar.date(from: endComps)
+        }
+
+        return Timeout.derivePhase(
+            now: now,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
+            isVerifiedToday: isVerifiedToday,
+            timeoutEndTime: timeoutEndTime
+        )
+    }
 
     // MARK: - Private helpers
 

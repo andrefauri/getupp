@@ -19,10 +19,31 @@ struct InternalToolsView: View {
     @State private var dayLog:                 [DayRecord]  = []
     @State private var selfTestResults:        [String]     = []
     @State private var timeoutSelfTestResults: [String]     = []
+    @State private var escapeSelfTestResults:  [String]     = []
 
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
+
+                // Reset — clears cross-test residue (exemptDate, lastVerifiedDate,
+                // timeout state, day log, appEnabled, emergencyBreaksUsed, breadcrumbs)
+                // back to fresh-install defaults. Deliberately leaves activitySelection
+                // and the wake schedule alone — those are real configuration, not
+                // test-session noise, and clearing them would make every reset a chore.
+                GroupBox("Reset") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Clears exempt/verified/timeout/day-log/escape-hatch state so each manual test starts clean. Leaves your app selection and wake window alone.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Button("Reset Test State") {
+                            resetTestState()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.red)
+                    }
+                    .padding(.vertical, 4)
+                }
 
                 // Authorization
                 GroupBox("Authorization") {
@@ -209,6 +230,65 @@ struct InternalToolsView: View {
                     .padding(.vertical, 4)
                 }
 
+                // Escape Hatch debug
+                GroupBox("Escape Hatch") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("App enabled:")
+                            Spacer()
+                            Text(shieldManager.appEnabled ? "Yes" : "No")
+                                .bold()
+                                .foregroundColor(shieldManager.appEnabled ? .green : .red)
+                        }
+                        HStack {
+                            Text("Emergency breaks used:")
+                            Spacer()
+                            Text("\(shieldManager.emergencyBreaksUsed)").monospacedDigit()
+                        }
+
+                        HStack(spacing: 12) {
+                            Button("Emergency Break") {
+                                shieldManager.emergencyBreak()
+                                dayLog = GetuppShared.loadDayLog()
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.orange)
+
+                            Button("Pull the Plug") {
+                                shieldManager.pullThePlug()
+                                dayLog = GetuppShared.loadDayLog()
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.red)
+                            .disabled(!shieldManager.appEnabled)
+
+                            Button("Turn Back On") {
+                                shieldManager.turnBackOn()
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.green)
+                            .disabled(shieldManager.appEnabled)
+                        }
+
+                        Button("Run Escape Hatch Self-Tests") {
+                            escapeSelfTestResults = runEscapeHatchSelfTests()
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.indigo)
+
+                        if !escapeSelfTestResults.isEmpty {
+                            VStack(alignment: .leading, spacing: 2) {
+                                ForEach(escapeSelfTestResults, id: \.self) { line in
+                                    Text(line)
+                                        .font(.caption2.monospaced())
+                                        .foregroundColor(line.hasPrefix("PASS") ? .green : .red)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+
                 // Schedule debug (Stop Schedule + Debug Window)
                 GroupBox("Schedule") {
                     VStack(spacing: 12) {
@@ -281,6 +361,41 @@ struct InternalToolsView: View {
 
     private func formatTime(_ dc: DateComponents) -> String {
         String(format: "%02d:%02d", dc.hour ?? 0, dc.minute ?? 0)
+    }
+
+    /// Returns every process's state to a fresh-install-equivalent baseline —
+    /// debug-only DATA reset, not a change to any production logic. Deliberately
+    /// leaves activitySelection and the wake schedule untouched (real config,
+    /// not test noise).
+    private func resetTestState() {
+        let defaults = GetuppShared.defaults
+
+        defaults?.removeObject(forKey: GetuppShared.exemptDateKey)
+        defaults?.removeObject(forKey: GetuppShared.lastVerifiedDateKey)
+        defaults?.removeObject(forKey: GetuppShared.appEnabledKey)
+        defaults?.removeObject(forKey: GetuppShared.emergencyBreaksUsedKey)
+        defaults?.removeObject(forKey: GetuppShared.breadcrumbsKey)
+        defaults?.removeObject(forKey: GetuppShared.activeBlockEndKey)
+
+        Timeout.clearAllTimeoutState()
+        defaults?.removeObject(forKey: Timeout.totalTimeoutMinutesKey)
+
+        GetuppShared.saveDayLog([])
+
+        shieldManager.removeShield()
+        shieldManager.isVerifiedToday    = false
+        shieldManager.timeoutEndTime     = nil
+        shieldManager.emergencyBreaksUsed = 0   // reconcileState() doesn't refresh this one
+        shieldManager.reconcileState()
+
+        dayLog                    = []
+        breadcrumbs               = []
+        selfTestResults           = []
+        timeoutSelfTestResults    = []
+        escapeSelfTestResults     = []
+
+        GetuppShared.logBreadcrumb("Reset Test State — cleared exempt/verified/timeout/day-log/escape-hatch state")
+        breadcrumbs = GetuppShared.loadBreadcrumbs()
     }
 
     private var statusText: String {

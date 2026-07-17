@@ -74,12 +74,15 @@ struct TimeoutCountdownView: View {
             }
             .padding(.top, 4)
 
-            // RESERVED: Emergency Break entry point (separate spec). The slot is
-            // deliberately low-prominence and inert for now.
-            Text("Emergency break")
-                .font(.caption2)
-                .foregroundColor(.secondary.opacity(0.4))
-                .padding(.top, 16)
+            // Emergency Break entry point — deliberately low-prominence (this
+            // is the second door into the SAME confirmation flow the Escape
+            // Hatch hub opens; see ShieldManager.activeEscape).
+            Button("Emergency break") {
+                shieldManager.activeEscape = .emergencyBreak
+            }
+            .font(.caption2)
+            .foregroundColor(.secondary.opacity(0.6))
+            .padding(.top, 16)
         }
         .frame(maxWidth: .infinity)
     }

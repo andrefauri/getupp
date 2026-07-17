@@ -27,6 +27,17 @@ class DeviceActivityMonitorExtension: DeviceActivityMonitor {
             return
         }
 
+        // Pull the Plug guard: a disabled GETUPP must never shield "helpfully."
+        // This also stands in for a disabled-app check inside Timeout.dailyMaintenance()
+        // — that function has no appEnabled concept (it stays Foundation+ManagedSettings
+        // only, so the memory-constrained shield targets can include it), and the
+        // only two callers of dailyMaintenance (here and reconcileState) are both
+        // guarded, so skipping it here is equivalent to guarding it there.
+        guard GetuppShared.isAppEnabled() else {
+            GetuppShared.logBreadcrumb("intervalDidStart — app disabled, skipping")
+            return
+        }
+
         // Timeout daily maintenance BEFORE any shield logic (R3 reset ordering):
         // completes a leftover elapsed timeout and promotes a queued downgrade,
         // so yesterday's state is gone before today's morning shields go up.
@@ -74,6 +85,14 @@ class DeviceActivityMonitorExtension: DeviceActivityMonitor {
         if activity == GetuppShared.timeoutActivityName {
             let completed = Timeout.completeTimeoutIfElapsed()
             GetuppShared.logBreadcrumb("intervalDidEnd — timeout \(completed ? "completed, shields cleared" : "already completed elsewhere")")
+            return
+        }
+
+        // Pull the Plug guard: if the app was disabled mid-window, there's
+        // nothing to clear (Pull the Plug already cleared it) and nothing to
+        // re-derive — bail rather than touching shield state on a disabled app.
+        guard GetuppShared.isAppEnabled() else {
+            GetuppShared.logBreadcrumb("intervalDidEnd — app disabled, skipping")
             return
         }
 

@@ -40,6 +40,21 @@ class ShieldManager: ObservableObject {
     @Published var isShielded:   Bool
     @Published var isMonitoring: Bool   // true only when a real WakeSchedule is registered
 
+    // MARK: - Published properties (timeout state)
+
+    /// Non-nil while a post-verification Timeout is running. Mirrors the App Group
+    /// key (Timeout.timeoutEndTimeKey) — that key is the source of truth.
+    @Published var timeoutEndTime: Date?
+
+    /// Lifetime completed timeout minutes (feeds the streak dialog).
+    @Published var totalTimeoutMinutes: Int
+
+    /// The active timeout duration setting (mirrors the App Group key).
+    @Published var timeoutDuration: TimeInterval
+
+    /// Downgrade queued for tomorrow, nil when none (R5).
+    @Published var pendingTimeoutDuration: TimeInterval?
+
     /// The wake schedule the user has configured, nil if none set yet.
     @Published var wakeSchedule: WakeSchedule?
 
@@ -67,11 +82,17 @@ class ShieldManager: ObservableObject {
         self.wakeSchedule    = GetuppShared.loadWakeSchedule()
         self.scheduleStart   = nil
         self.scheduleEnd     = nil
+        self.timeoutEndTime         = Timeout.loadTimeoutEnd()
+        self.totalTimeoutMinutes    = Timeout.totalMinutes
+        self.timeoutDuration        = Timeout.currentDuration
+        self.pendingTimeoutDuration = Timeout.pendingDuration
 
         self.activitySelection = loadSelection() ?? FamilyActivitySelection()
 
-        // If the user verified but the shield is still up (app was killed mid-flow), clear it.
-        if self.isVerifiedToday && self.isShielded {
+        // If the user verified but the shield is still up (app was killed mid-flow),
+        // clear it — UNLESS a Timeout is running: then verified + shielded is exactly
+        // the intended state, and clearing here would kill the timeout on relaunch.
+        if self.isVerifiedToday && self.isShielded && Timeout.loadTimeoutEnd() == nil {
             GetuppShared.removeShield()
             self.isShielded = false
         }
@@ -190,8 +211,8 @@ class ShieldManager: ObservableObject {
         let endDate   = now.addingTimeInterval(17 * 60)   // +17 min = 15-min window
 
         let cal   = Calendar.current
-        var start = cal.dateComponents([.hour, .minute], from: startDate)
-        var end   = cal.dateComponents([.hour, .minute], from: endDate)
+        let start = cal.dateComponents([.hour, .minute], from: startDate)
+        let end   = cal.dateComponents([.hour, .minute], from: endDate)
 
         let schedule = DeviceActivitySchedule(
             intervalStart: start,
@@ -226,13 +247,41 @@ class ShieldManager: ObservableObject {
     /// Called on every app-active transition. Compares expected vs actual shield state
     /// and corrects drift from missed DeviceActivity callbacks (known Apple reliability issue).
     func reconcileState() {
+        let now      = Date()
+        let defaults = GetuppShared.defaults
+
+        // Timeout daily maintenance first (clearing layer 2 — check-on-open):
+        // completes an elapsed timeout (credits minutes, clears shields) and
+        // promotes a queued downgrade. Idempotent; extensions run it too.
+        Timeout.dailyMaintenance(now: now)
+
+        // Re-sync published state that maintenance (or an extension) may have
+        // changed behind our back — the App Group is the source of truth.
+        isShielded             = defaults?.bool(forKey: GetuppShared.shieldedKey) ?? false
+        totalTimeoutMinutes    = Timeout.totalMinutes
+        timeoutDuration        = Timeout.currentDuration
+        pendingTimeoutDuration = Timeout.pendingDuration
+
         // Lazy resolution: never trust a callback to fire at window end. Every
         // app-active transition snapshots today and backfills any unresolved
         // past dates so the streak is always correct on read.
         refreshStreak()
 
-        let now      = Date()
-        let defaults = GetuppShared.defaults
+        // ── An active Timeout overrides everything else ─────────────────────────
+        if let end = Timeout.loadTimeoutEnd(), now < end {
+            timeoutEndTime = end
+            if !isShielded {
+                // Shield was lost mid-timeout (e.g. reboot) — reapply.
+                applyShield()
+                GetuppShared.logBreadcrumb("Reconcile: timeout active — shield reapplied")
+            }
+            return
+        }
+
+        // No timeout running: publish that, and stop any orphaned one-off
+        // timeout schedule left over from a completed/cleared timeout (R10).
+        timeoutEndTime = nil
+        DeviceActivityCenter().stopMonitoring([GetuppShared.timeoutActivityName])
 
         // ── activeBlockEnd is authoritative when it exists ──────────────────────
         if let blockEnd = defaults?.object(forKey: GetuppShared.activeBlockEndKey) as? Date {
@@ -275,21 +324,97 @@ class ShieldManager: ObservableObject {
     // MARK: - Verification
 
     func markVerified() {
-        GetuppShared.defaults?.set(Date(), forKey: GetuppShared.lastVerifiedDateKey)
+        let now = Date()
+        GetuppShared.defaults?.set(now, forKey: GetuppShared.lastVerifiedDateKey)
         isVerifiedToday = true
-        GetuppShared.logBreadcrumb("Verified — removing shield")
-        removeShield()
 
-        // POC: instant +1 — no post-verification buffer yet (that ships with the
-        // emergency break feature; deriveStreak already supports it via timeoutDuration).
+        // Timeout (R1): shields STAY on. Write the clamped end time — the single
+        // source of truth every clearing layer checks — and register the one-off
+        // schedule (layer 1). Only when actually blocked: a debug verification
+        // with no shield up shouldn't conjure one.
+        if isShielded {
+            let end = Timeout.beginTimeout(
+                now: now,
+                nextWindowStart: wakeSchedule?.nextWindowStart(after: now)
+            )
+            timeoutEndTime = end
+            registerTimeoutSchedule(endingAt: end, now: now)
+            GetuppShared.logBreadcrumb("Verified — timeout until \(end.formatted(date: .omitted, time: .shortened))")
+        } else {
+            GetuppShared.logBreadcrumb("Verified — no shield up, no timeout started")
+        }
+
         GetuppShared.markVerifiedToday()
         refreshStreak()
+    }
+
+    /// Clearing layer 1: a one-off (non-repeating) DeviceActivity schedule ending
+    /// at timeoutEndTime; the Monitor extension clears shields in intervalDidEnd.
+    /// Also called on every extend with the new end time.
+    private func registerTimeoutSchedule(endingAt end: Date, now: Date = Date()) {
+        let center = DeviceActivityCenter()
+        center.stopMonitoring([GetuppShared.timeoutActivityName])
+
+        // DeviceActivity rejects intervals under 15 minutes. Layers 2 and 3 ask
+        // the exact same question of the same stored value, so a short timeout
+        // still ends on time — just without the scheduled callback.
+        guard end.timeIntervalSince(now) >= 15 * 60 else {
+            GetuppShared.logBreadcrumb("Timeout < 15 min — L1 schedule skipped, L2/L3 cover it")
+            return
+        }
+
+        let calendar = Calendar.current
+        let schedule = DeviceActivitySchedule(
+            intervalStart: calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: now),
+            intervalEnd:   calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: end),
+            repeats:       false
+        )
+
+        do {
+            try center.startMonitoring(GetuppShared.timeoutActivityName, during: schedule)
+            GetuppShared.logBreadcrumb("Timeout schedule registered — ends \(end.formatted(date: .omitted, time: .shortened))")
+        } catch {
+            // Not fatal: layers 2 and 3 still clear on time.
+            GetuppShared.logBreadcrumb("Timeout schedule error: \(error.localizedDescription) — L2/L3 cover it")
+        }
+    }
+
+    // MARK: - Timeout settings + extend
+
+    /// R5: increases apply immediately; decreases queue for tomorrow.
+    /// Returns true if the change queued (so the UI can call the cheat out).
+    @discardableResult
+    func setTimeoutDuration(_ requested: TimeInterval) -> Bool {
+        Timeout.setDuration(requested)
+        timeoutDuration        = Timeout.currentDuration
+        pendingTimeoutDuration = Timeout.pendingDuration
+        return pendingTimeoutDuration != nil
+    }
+
+    /// R6: one-tap extend. Adds to the running timeout (clamped to the next
+    /// window start) and re-registers the layer-1 schedule with the new end.
+    func extendTimeout(by delta: TimeInterval) {
+        let now = Date()
+        guard let newEnd = Timeout.extendTimeout(
+            by: delta,
+            now: now,
+            nextWindowStart: wakeSchedule?.nextWindowStart(after: now)
+        ) else { return }
+
+        timeoutEndTime = newEnd
+        registerTimeoutSchedule(endingAt: newEnd, now: now)
+        GetuppShared.logBreadcrumb("Timeout extended — now ends \(newEnd.formatted(date: .omitted, time: .shortened))")
     }
 
     func clearVerifiedDate() {
         GetuppShared.defaults?.removeObject(forKey: GetuppShared.lastVerifiedDateKey)
         isVerifiedToday = false
         GetuppShared.logBreadcrumb("Debug: cleared lastVerifiedDate")
+
+        // Undo any timeout the verification started, so debug state stays coherent.
+        Timeout.clearAllTimeoutState()
+        timeoutEndTime = nil
+        DeviceActivityCenter().stopMonitoring([GetuppShared.timeoutActivityName])
 
         GetuppShared.clearVerifiedToday()
         refreshStreak()
@@ -315,6 +440,18 @@ class ShieldManager: ObservableObject {
     func removeShield() {
         GetuppShared.removeShield()
         isShielded = false
+    }
+
+    /// Debug emergency unlock (offline-lockout safety net — must always work).
+    /// Wipes the running timeout WITHOUT crediting minutes, then unshields.
+    /// Plain removeShield() isn't enough mid-timeout: reconcileState would see
+    /// timeoutEndTime still set and immediately re-shield.
+    func debugEmergencyUnlock() {
+        Timeout.clearAllTimeoutState()
+        timeoutEndTime = nil
+        DeviceActivityCenter().stopMonitoring([GetuppShared.timeoutActivityName])
+        removeShield()
+        GetuppShared.logBreadcrumb("Debug emergency unlock — timeout cleared, shield removed")
     }
 
     // MARK: - Persistence

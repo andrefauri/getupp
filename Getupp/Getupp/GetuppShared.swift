@@ -41,10 +41,12 @@ enum GetuppShared {
     static let windowActivityName  = DeviceActivityName("getupp.window.everyday")
     // Temporary debug window — never mutates WakeSchedule state.
     static let debugActivityName   = DeviceActivityName("getupp.debug")
+    // One-off schedule ending at timeoutEndTime — clearing layer 1 (see Timeout.swift).
+    static let timeoutActivityName = DeviceActivityName("getupp.timeout")
 
     /// All activity names we may ever have registered, for stop-all convenience.
     static let allActivityNames: [DeviceActivityName] = [
-        legacyActivityName, windowActivityName, debugActivityName
+        legacyActivityName, windowActivityName, debugActivityName, timeoutActivityName
     ]
 
     // The shared ManagedSettingsStore — same name in app and extension so
@@ -189,7 +191,8 @@ enum GetuppShared {
     }
 
     /// Convenience: backfills, then derives the current streak.
-    /// POC values: timeoutDuration = 0 (instant +1 on verification),
+    /// timeoutDuration comes from the Timeout feature: today stays .pending until
+    /// the post-verification timeout completes, then the +1 lands.
     /// appEnabled = true (disable-breaks-streak not wired yet).
     static func currentStreak(schedule: WakeSchedule?, now: Date = Date()) -> StreakResult {
         backfillDayLog(schedule: schedule, now: now)
@@ -205,7 +208,7 @@ enum GetuppShared {
             today: todayKey(now: now),
             now: now,
             windowEnd: windowEnd,
-            timeoutDuration: 0,
+            timeoutDuration: Timeout.effectiveStreakDuration(now: now),
             appEnabled: true
         )
     }

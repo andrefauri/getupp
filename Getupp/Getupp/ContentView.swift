@@ -17,10 +17,14 @@ struct ContentView: View {
 
     @State private var isPickerPresented = false
     @State private var showEditSheet     = false
+    @State private var showCustomTimeout = false
+    @State private var showStreakDialog  = false
+    @State private var timeoutCopyLine   = ""
     @State private var breadcrumbs:  [String] = []
     #if DEBUG
-    @State private var dayLog:          [DayRecord] = []
-    @State private var selfTestResults: [String]    = []
+    @State private var dayLog:                 [DayRecord] = []
+    @State private var selfTestResults:        [String]    = []
+    @State private var timeoutSelfTestResults: [String]    = []
     #endif
 
     var body: some View {
@@ -32,6 +36,7 @@ struct ContentView: View {
                     streakCard
                     mainStateSection
                     wakeWindowCard
+                    timeoutCard
                     appSelectionCard
 
                     #if DEBUG
@@ -72,6 +77,17 @@ struct ContentView: View {
                 WakeWindowEditSheet(existing: shieldManager.wakeSchedule)
                     .environmentObject(shieldManager)
             }
+            .sheet(isPresented: $showCustomTimeout) {
+                CustomTimeoutSheet { seconds in
+                    applyTimeoutSelection(seconds)
+                }
+            }
+            .sheet(isPresented: $showStreakDialog) {
+                StreakDialog(
+                    streakCount: shieldManager.streak.count,
+                    totalTimeoutMinutes: shieldManager.totalTimeoutMinutes
+                )
+            }
         }
     }
 
@@ -88,6 +104,8 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .onTapGesture { showStreakDialog = true }   // R9: streak + benched minutes
         }
     }
 
@@ -105,12 +123,21 @@ struct ContentView: View {
 
     @ViewBuilder
     private var mainStateSection: some View {
-        if shieldManager.isVerifiedToday {
+        if shieldManager.timeoutEndTime != nil {
+            timeoutView
+        } else if shieldManager.isVerifiedToday {
             verifiedTodayView
         } else if shieldManager.isShielded {
             needsVerificationView
         } else {
             idleView
+        }
+    }
+
+    private var timeoutView: some View {
+        GroupBox {
+            TimeoutCountdownView()
+                .padding(.vertical, 8)
         }
     }
 
@@ -210,6 +237,79 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Timeout card (user zone)
+
+    /// Preset row (R4). Order matters — escalating commitment, 30 min default.
+    private let timeoutPresets: [(label: String, seconds: TimeInterval)] = [
+        ("15m", 15 * 60), ("30m", 30 * 60), ("1h", 3600), ("2h", 2 * 3600), ("5h", 5 * 3600),
+    ]
+
+    private var timeoutCard: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("TIMEOUT")
+                    .font(.caption.uppercaseSmallCaps())
+                    .foregroundColor(.secondary)
+
+                Text("After the photo, apps stay blocked for:")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                HStack(spacing: 8) {
+                    ForEach(timeoutPresets, id: \.label) { preset in
+                        presetButton(preset.label, preset.seconds)
+                    }
+                }
+
+                Button("Custom…") { showCustomTimeout = true }
+                    .font(.caption)
+
+                if let pending = shieldManager.pendingTimeoutDuration {
+                    Text("\(durationLabel(shieldManager.timeoutDuration)) → \(durationLabel(pending)) tomorrow")
+                        .font(.caption.bold())
+                        .foregroundColor(.orange)
+                }
+
+                if !timeoutCopyLine.isEmpty {
+                    Text(timeoutCopyLine)
+                        .font(.caption.italic())
+                        .foregroundColor(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+        }
+    }
+
+    @ViewBuilder
+    private func presetButton(_ label: String, _ seconds: TimeInterval) -> some View {
+        let isActive = shieldManager.timeoutDuration == seconds
+        Button {
+            applyTimeoutSelection(seconds)
+        } label: {
+            Text(label)
+                .font(.callout.bold())
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .tint(isActive ? .indigo : .secondary)
+    }
+
+    /// Shared by presets and the custom sheet: applies R5 (increase now,
+    /// decrease tomorrow) and picks the matching copy line.
+    private func applyTimeoutSelection(_ seconds: TimeInterval) {
+        let queued = shieldManager.setTimeoutDuration(seconds)
+        timeoutCopyLine = queued
+            ? TimeoutCopy.line(for: .downgradeBlocked)
+            : TimeoutCopy.line(for: TimeoutCopy.pool(forPresetDuration: seconds))
+    }
+
+    private func durationLabel(_ seconds: TimeInterval) -> String {
+        let minutes = Int(seconds / 60)
+        if minutes >= 60 && minutes % 60 == 0 { return "\(minutes / 60) h" }
+        return "\(minutes) min"
+    }
+
     // MARK: - App Selection card (user zone)
 
     private var appSelectionCard: some View {
@@ -289,7 +389,9 @@ struct ContentView: View {
                             .buttonStyle(.borderedProminent).tint(.red)
                             .disabled(shieldManager.isShielded
                                       || shieldManager.selectedAppCount + shieldManager.selectedCategoryCount == 0)
-                        Button("Unblock Now") { shieldManager.removeShield() }
+                        // Emergency unlock (offline safety net): also wipes any
+                        // running timeout, else reconcile would re-shield instantly.
+                        Button("Unblock Now") { shieldManager.debugEmergencyUnlock() }
                             .buttonStyle(.borderedProminent).tint(.green)
                             .disabled(!shieldManager.isShielded)
                     }
@@ -385,6 +487,61 @@ struct ContentView: View {
                 .padding(.vertical, 4)
             }
 
+            // Timeout debug
+            GroupBox("Timeout") {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Duration:")
+                        Spacer()
+                        Text("\(Int(Timeout.currentDuration / 60)) min").monospacedDigit()
+                    }
+                    HStack {
+                        Text("Running until:")
+                        Spacer()
+                        Text(shieldManager.timeoutEndTime.map {
+                            $0.formatted(date: .omitted, time: .shortened)
+                        } ?? "—").monospacedDigit()
+                    }
+                    HStack {
+                        Text("Total minutes:")
+                        Spacer()
+                        Text("\(shieldManager.totalTimeoutMinutes)").monospacedDigit()
+                    }
+
+                    HStack(spacing: 12) {
+                        // Deliberately below the 15-min floor so tests run fast —
+                        // exercises layers 2/3, since layer 1 skips < 15 min.
+                        Button("Set 2-min Timeout") {
+                            GetuppShared.defaults?.set(120.0, forKey: Timeout.timeoutDurationKey)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.orange)
+
+                        Button("Reset to 30 min") {
+                            GetuppShared.defaults?.set(Timeout.defaultDuration, forKey: Timeout.timeoutDurationKey)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    Button("Run Timeout Self-Tests") {
+                        timeoutSelfTestResults = runTimeoutSelfTests()
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.indigo)
+
+                    if !timeoutSelfTestResults.isEmpty {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(timeoutSelfTestResults, id: \.self) { line in
+                                Text(line)
+                                    .font(.caption2.monospaced())
+                                    .foregroundColor(line.hasPrefix("PASS") ? .green : .red)
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
             // Schedule debug (Stop Schedule + Debug Window)
             GroupBox("Schedule") {
                 VStack(spacing: 12) {
@@ -454,10 +611,11 @@ struct ContentView: View {
 
     private var statusText: String {
         switch shieldManager.authorizationStatus {
-        case .notDetermined: return "Not Determined"
-        case .denied:        return "Denied"
-        case .approved:      return "Approved"
-        @unknown default:    return "Unknown"
+        case .notDetermined:          return "Not Determined"
+        case .denied:                 return "Denied"
+        case .approved:               return "Approved"
+        case .approvedWithDataAccess: return "Approved"
+        @unknown default:             return "Unknown"
         }
     }
 
@@ -467,6 +625,89 @@ struct ContentView: View {
         case .denied:   return .red
         default:        return .orange
         }
+    }
+}
+
+// MARK: - Custom timeout sheet (R4 custom entry)
+
+/// Minimal wheel picker: floor 15 min (DeviceActivity minimum), cap 8 h.
+/// Timeout.setDuration clamps too — this UI just makes the bounds visible.
+private struct CustomTimeoutSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var hours   = 0
+    @State private var minutes = 30
+
+    let onSave: (TimeInterval) -> Void
+
+    private var totalSeconds: TimeInterval {
+        TimeInterval(hours * 3600 + minutes * 60)
+    }
+    private var isValid: Bool {
+        totalSeconds >= Timeout.minDuration && totalSeconds <= Timeout.maxDuration
+    }
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 16) {
+                HStack(spacing: 0) {
+                    Picker("Hours", selection: $hours) {
+                        ForEach(0...8, id: \.self) { Text("\($0) h") }
+                    }
+                    .pickerStyle(.wheel)
+
+                    Picker("Minutes", selection: $minutes) {
+                        ForEach([0, 15, 30, 45], id: \.self) { Text("\($0) min") }
+                    }
+                    .pickerStyle(.wheel)
+                }
+                .frame(height: 160)
+
+                if !isValid {
+                    Text("Between 15 minutes and 8 hours.")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+
+                Button("Save") {
+                    onSave(totalSeconds)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!isValid)
+            }
+            .padding()
+            .navigationTitle("Custom Timeout")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .presentationDetents([.medium])
+    }
+}
+
+// MARK: - Streak dialog (R9)
+
+/// Streak number big and centered, its label beneath, total timeout minutes
+/// below that. Nothing else for now.
+private struct StreakDialog: View {
+    let streakCount: Int
+    let totalTimeoutMinutes: Int
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("\(streakCount)")
+                .font(.system(size: 96, weight: .black).monospacedDigit())
+
+            Text("morning\(streakCount == 1 ? "" : "s")")
+                .font(.title3.bold())
+                .foregroundColor(.secondary)
+
+            Text("apps benched: \(totalTimeoutMinutes) min")
+                .font(.headline)
+                .foregroundColor(.orange)
+                .padding(.top, 16)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .presentationDetents([.medium])
     }
 }
 

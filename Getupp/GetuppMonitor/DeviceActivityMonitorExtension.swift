@@ -9,6 +9,7 @@
 
 import DeviceActivity
 import FamilyControls
+import Foundation
 import ManagedSettings
 
 class DeviceActivityMonitorExtension: DeviceActivityMonitor {
@@ -17,6 +18,19 @@ class DeviceActivityMonitorExtension: DeviceActivityMonitor {
         super.intervalDidStart(for: activity)
 
         GetuppShared.logBreadcrumb("intervalDidStart — \(activity.rawValue)")
+
+        // The one-off timeout schedule fires an immediate didStart when registered.
+        // Shields are already on (they never came off at verification) — nothing
+        // to do, and it must NOT count as a morning session.
+        if activity == GetuppShared.timeoutActivityName {
+            GetuppShared.logBreadcrumb("Timeout schedule armed — no action")
+            return
+        }
+
+        // Timeout daily maintenance BEFORE any shield logic (R3 reset ordering):
+        // completes a leftover elapsed timeout and promotes a queued downgrade,
+        // so yesterday's state is gone before today's morning shields go up.
+        Timeout.dailyMaintenance()
 
         // Record that today's session ran, regardless of what happens below —
         // the streak only cares that the window fired, not whether the shield
@@ -54,6 +68,22 @@ class DeviceActivityMonitorExtension: DeviceActivityMonitor {
 
     override func intervalDidEnd(for activity: DeviceActivityName) {
         super.intervalDidEnd(for: activity)
+
+        // Timeout schedule ended (clearing layer 1): complete the timeout —
+        // credits minutes and clears shields via the shared completion path.
+        if activity == GetuppShared.timeoutActivityName {
+            let completed = Timeout.completeTimeoutIfElapsed()
+            GetuppShared.logBreadcrumb("intervalDidEnd — timeout \(completed ? "completed, shields cleared" : "already completed elsewhere")")
+            return
+        }
+
+        // R3: Timeout overrides window end. If the user verified late in the
+        // window, the timeout outlives it — shields must survive this boundary
+        // and clear only at timeoutEndTime.
+        guard Timeout.shouldClearShieldAtWindowEnd(now: Date(), timeoutEndTime: Timeout.loadTimeoutEnd()) else {
+            GetuppShared.logBreadcrumb("intervalDidEnd — \(activity.rawValue) — timeout active, shields STAY")
+            return
+        }
 
         GetuppShared.logBreadcrumb("intervalDidEnd — \(activity.rawValue) — removing shield")
         GetuppShared.removeShield()

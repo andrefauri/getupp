@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DF10A6DD300A744900CF4FA9 /* ManagedSettings.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF27513D3006BF0500093885 /* ManagedSettings.framework */; };
+		DF10A6E5300A744900CF4FA9 /* GetuppShieldAction.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = DF10A6DC300A744900CF4FA9 /* GetuppShieldAction.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DF27512A3006BEC600093885 /* DeviceActivity.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF2751293006BEC600093885 /* DeviceActivity.framework */; };
 		DF2751323006BEC600093885 /* GetuppMonitor.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = DF2751273006BEC600093885 /* GetuppMonitor.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DF27513E3006BF0500093885 /* ManagedSettings.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF27513D3006BF0500093885 /* ManagedSettings.framework */; };
@@ -15,6 +17,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		DF10A6E3300A744900CF4FA9 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DF27510C3006B98800093885 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DF10A6DB300A744900CF4FA9;
+			remoteInfo = GetuppShieldAction;
+		};
 		DF2751303006BEC600093885 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = DF27510C3006B98800093885 /* Project object */;
@@ -40,6 +49,7 @@
 			files = (
 				DF2751483006BF0500093885 /* GetuppShield.appex in Embed Foundation Extensions */,
 				DF2751323006BEC600093885 /* GetuppMonitor.appex in Embed Foundation Extensions */,
+				DF10A6E5300A744900CF4FA9 /* GetuppShieldAction.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -47,6 +57,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		DF10A6DC300A744900CF4FA9 /* GetuppShieldAction.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = GetuppShieldAction.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF2751143006B98800093885 /* Getupp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Getupp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF2751273006BEC600093885 /* GetuppMonitor.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = GetuppMonitor.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF2751293006BEC600093885 /* DeviceActivity.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = DeviceActivity.framework; path = System/Library/Frameworks/DeviceActivity.framework; sourceTree = SDKROOT; };
@@ -56,6 +67,28 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		DF10A6D7300A6F8400CF4FA9 /* Exceptions for "Getupp" folder in "GetuppShield" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Timeout.swift,
+				TimeoutCopy.swift,
+			);
+			target = DF27513B3006BF0500093885 /* GetuppShield */;
+		};
+		DF10A6E6300A744900CF4FA9 /* Exceptions for "GetuppShieldAction" folder in "GetuppShieldAction" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = DF10A6DB300A744900CF4FA9 /* GetuppShieldAction */;
+		};
+		DF10A6EB300A757600CF4FA9 /* Exceptions for "Getupp" folder in "GetuppShieldAction" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Timeout.swift,
+			);
+			target = DF10A6DB300A744900CF4FA9 /* GetuppShieldAction */;
+		};
 		DF2751333006BEC600093885 /* Exceptions for "GetuppMonitor" folder in "GetuppMonitor" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -75,6 +108,7 @@
 			membershipExceptions = (
 				GetuppShared.swift,
 				Streak.swift,
+				Timeout.swift,
 				WakeSchedule.swift,
 			);
 			target = DF2751263006BEC600093885 /* GetuppMonitor */;
@@ -82,10 +116,20 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		DF10A6DE300A744900CF4FA9 /* GetuppShieldAction */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				DF10A6E6300A744900CF4FA9 /* Exceptions for "GetuppShieldAction" folder in "GetuppShieldAction" target */,
+			);
+			path = GetuppShieldAction;
+			sourceTree = "<group>";
+		};
 		DF2751163006B98800093885 /* Getupp */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				DF2751523007AA7900093885 /* Exceptions for "Getupp" folder in "GetuppMonitor" target */,
+				DF10A6D7300A6F8400CF4FA9 /* Exceptions for "Getupp" folder in "GetuppShield" target */,
+				DF10A6EB300A757600CF4FA9 /* Exceptions for "Getupp" folder in "GetuppShieldAction" target */,
 			);
 			path = Getupp;
 			sourceTree = "<group>";
@@ -109,6 +153,14 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		DF10A6D9300A744900CF4FA9 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DF10A6DD300A744900CF4FA9 /* ManagedSettings.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		DF2751113006B98800093885 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -142,6 +194,7 @@
 				DF2751163006B98800093885 /* Getupp */,
 				DF27512B3006BEC600093885 /* GetuppMonitor */,
 				DF2751413006BF0500093885 /* GetuppShield */,
+				DF10A6DE300A744900CF4FA9 /* GetuppShieldAction */,
 				DF2751283006BEC600093885 /* Frameworks */,
 				DF2751153006B98800093885 /* Products */,
 			);
@@ -153,6 +206,7 @@
 				DF2751143006B98800093885 /* Getupp.app */,
 				DF2751273006BEC600093885 /* GetuppMonitor.appex */,
 				DF27513C3006BF0500093885 /* GetuppShield.appex */,
+				DF10A6DC300A744900CF4FA9 /* GetuppShieldAction.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -170,6 +224,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		DF10A6DB300A744900CF4FA9 /* GetuppShieldAction */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DF10A6E7300A744900CF4FA9 /* Build configuration list for PBXNativeTarget "GetuppShieldAction" */;
+			buildPhases = (
+				DF10A6D8300A744900CF4FA9 /* Sources */,
+				DF10A6D9300A744900CF4FA9 /* Frameworks */,
+				DF10A6DA300A744900CF4FA9 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				DF10A6DE300A744900CF4FA9 /* GetuppShieldAction */,
+			);
+			name = GetuppShieldAction;
+			packageProductDependencies = (
+			);
+			productName = GetuppShieldAction;
+			productReference = DF10A6DC300A744900CF4FA9 /* GetuppShieldAction.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		DF2751133006B98800093885 /* Getupp */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = DF27511F3006B98A00093885 /* Build configuration list for PBXNativeTarget "Getupp" */;
@@ -184,6 +260,7 @@
 			dependencies = (
 				DF2751313006BEC600093885 /* PBXTargetDependency */,
 				DF2751473006BF0500093885 /* PBXTargetDependency */,
+				DF10A6E4300A744900CF4FA9 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				DF2751163006B98800093885 /* Getupp */,
@@ -249,6 +326,9 @@
 				LastSwiftUpdateCheck = 2660;
 				LastUpgradeCheck = 2660;
 				TargetAttributes = {
+					DF10A6DB300A744900CF4FA9 = {
+						CreatedOnToolsVersion = 26.6;
+					};
 					DF2751133006B98800093885 = {
 						CreatedOnToolsVersion = 26.6;
 					};
@@ -277,11 +357,19 @@
 				DF2751133006B98800093885 /* Getupp */,
 				DF2751263006BEC600093885 /* GetuppMonitor */,
 				DF27513B3006BF0500093885 /* GetuppShield */,
+				DF10A6DB300A744900CF4FA9 /* GetuppShieldAction */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		DF10A6DA300A744900CF4FA9 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		DF2751123006B98800093885 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -306,6 +394,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		DF10A6D8300A744900CF4FA9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		DF2751103006B98800093885 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -330,6 +425,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		DF10A6E4300A744900CF4FA9 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DF10A6DB300A744900CF4FA9 /* GetuppShieldAction */;
+			targetProxy = DF10A6E3300A744900CF4FA9 /* PBXContainerItemProxy */;
+		};
 		DF2751313006BEC600093885 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = DF2751263006BEC600093885 /* GetuppMonitor */;
@@ -343,6 +443,69 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		DF10A6E8300A744900CF4FA9 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = GetuppShieldAction/GetuppShieldAction.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = P8GGXB37C9;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = GetuppShieldAction/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = GetuppShieldAction;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = co.getupp.app.GetuppShieldAction;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		DF10A6E9300A744900CF4FA9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = GetuppShieldAction/GetuppShieldAction.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = P8GGXB37C9;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = GetuppShieldAction/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = GetuppShieldAction;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = co.getupp.app.GetuppShieldAction;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		DF27511D3006B98A00093885 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -686,6 +849,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		DF10A6E7300A744900CF4FA9 /* Build configuration list for PBXNativeTarget "GetuppShieldAction" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DF10A6E8300A744900CF4FA9 /* Debug */,
+				DF10A6E9300A744900CF4FA9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		DF27510F3006B98800093885 /* Build configuration list for PBXProject "Getupp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

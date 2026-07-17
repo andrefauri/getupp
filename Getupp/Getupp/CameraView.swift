@@ -116,9 +116,10 @@ struct CameraView: View {
                 .font(.system(size: 52, weight: .black))
                 .foregroundColor(.green)
 
-            Text("Apps unblocked.")
-                .font(.title2.bold())
-                .foregroundColor(.white)
+            // The success screen IS the countdown screen: apps stay blocked
+            // until the Timeout ends (see Timeout.swift).
+            TimeoutCountdownView()
+                .environment(\.colorScheme, .dark)   // view sits on a black background
 
             Text("🔥 \(shieldManager.streak.count) morning\(shieldManager.streak.count == 1 ? "" : "s")")
                 .font(.headline)
@@ -127,12 +128,6 @@ struct CameraView: View {
             Text(String(format: "Confidence: %.0f%%", result.confidence * 100))
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.7))
-
-            Text(result.reason)
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.5))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
 
             Button("Done") {
                 // Navigate back to the main screen.

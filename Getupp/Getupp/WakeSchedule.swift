@@ -99,4 +99,26 @@ struct WakeSchedule: Codable {
     func isWindowActive(calendar: Calendar = .current, now: Date = Date()) -> Bool {
         isCurrentlyActive(calendar: calendar, now: now) && isActiveDay(calendar: calendar, now: now)
     }
+
+    /// The next wall-clock instant a window will start after `now` — today's
+    /// start time if it's still ahead, else the next active day's. Used to clamp
+    /// timeoutEndTime so a Timeout can never collide with tomorrow's window.
+    /// Walks at most 8 days (covers every dayMode); nil if disabled or no active day.
+    func nextWindowStart(after now: Date = Date(), calendar: Calendar = .current) -> Date? {
+        guard isEnabled else { return nil }
+
+        for dayOffset in 0..<8 {
+            guard let day = calendar.date(byAdding: .day, value: dayOffset, to: now) else { continue }
+            var comps    = calendar.dateComponents([.year, .month, .day], from: day)
+            comps.hour   = startHour
+            comps.minute = startMinute
+            comps.second = 0
+            guard let candidate = calendar.date(from: comps) else { continue }
+
+            if candidate > now && isActiveDay(calendar: calendar, now: candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
 }

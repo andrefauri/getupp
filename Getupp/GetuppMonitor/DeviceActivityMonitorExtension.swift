@@ -18,6 +18,11 @@ class DeviceActivityMonitorExtension: DeviceActivityMonitor {
 
         GetuppShared.logBreadcrumb("intervalDidStart — \(activity.rawValue)")
 
+        // Record that today's session ran, regardless of what happens below —
+        // the streak only cares that the window fired, not whether the shield
+        // ends up applied (already-verified and exempt days still "ran").
+        GetuppShared.recordSessionRanToday()
+
         // Skip if the user already verified today (daily-reset gate).
         if GetuppShared.isVerifiedToday() {
             GetuppShared.logBreadcrumb("Already verified today — skipping shield")

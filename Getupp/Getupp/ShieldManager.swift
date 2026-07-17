@@ -30,6 +30,11 @@ class ShieldManager: ObservableObject {
 
     @Published var isVerifiedToday: Bool
 
+    // MARK: - Published properties (streak)
+
+    /// Derived from the day log — never a stored counter. See Streak.swift.
+    @Published var streak: StreakResult = .zero
+
     // MARK: - Published properties (shield state)
 
     @Published var isShielded:   Bool
@@ -90,6 +95,8 @@ class ShieldManager: ObservableObject {
                 self?.authorizationStatus = AuthorizationCenter.shared.authorizationStatus
             }
             .store(in: &cancellables)
+
+        refreshStreak()
     }
 
     // MARK: - Authorization
@@ -219,6 +226,11 @@ class ShieldManager: ObservableObject {
     /// Called on every app-active transition. Compares expected vs actual shield state
     /// and corrects drift from missed DeviceActivity callbacks (known Apple reliability issue).
     func reconcileState() {
+        // Lazy resolution: never trust a callback to fire at window end. Every
+        // app-active transition snapshots today and backfills any unresolved
+        // past dates so the streak is always correct on read.
+        refreshStreak()
+
         let now      = Date()
         let defaults = GetuppShared.defaults
 
@@ -267,12 +279,30 @@ class ShieldManager: ObservableObject {
         isVerifiedToday = true
         GetuppShared.logBreadcrumb("Verified — removing shield")
         removeShield()
+
+        // POC: instant +1 — no post-verification buffer yet (that ships with the
+        // emergency break feature; deriveStreak already supports it via timeoutDuration).
+        GetuppShared.markVerifiedToday()
+        refreshStreak()
     }
 
     func clearVerifiedDate() {
         GetuppShared.defaults?.removeObject(forKey: GetuppShared.lastVerifiedDateKey)
         isVerifiedToday = false
         GetuppShared.logBreadcrumb("Debug: cleared lastVerifiedDate")
+
+        GetuppShared.clearVerifiedToday()
+        refreshStreak()
+    }
+
+    // MARK: - Streak
+
+    /// Snapshots today's scheduled state (first open of the day only), backfills
+    /// any unresolved past dates, and recomputes the published streak.
+    /// Called from init and every app-active transition (reconcileState).
+    func refreshStreak() {
+        GetuppShared.snapshotScheduledToday(schedule: wakeSchedule)
+        streak = GetuppShared.currentStreak(schedule: wakeSchedule)
     }
 
     // MARK: - Shielding

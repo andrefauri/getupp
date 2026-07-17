@@ -74,6 +74,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				GetuppShared.swift,
+				Streak.swift,
 				WakeSchedule.swift,
 			);
 			target = DF2751263006BEC600093885 /* GetuppMonitor */;

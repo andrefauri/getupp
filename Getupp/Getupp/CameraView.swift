@@ -120,6 +120,10 @@ struct CameraView: View {
                 .font(.title2.bold())
                 .foregroundColor(.white)
 
+            Text("🔥 \(shieldManager.streak.count) morning\(shieldManager.streak.count == 1 ? "" : "s")")
+                .font(.headline)
+                .foregroundColor(.orange)
+
             Text(String(format: "Confidence: %.0f%%", result.confidence * 100))
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.7))

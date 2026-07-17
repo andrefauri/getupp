@@ -18,6 +18,10 @@ struct ContentView: View {
     @State private var isPickerPresented = false
     @State private var showEditSheet     = false
     @State private var breadcrumbs:  [String] = []
+    #if DEBUG
+    @State private var dayLog:          [DayRecord] = []
+    @State private var selfTestResults: [String]    = []
+    #endif
 
     var body: some View {
         NavigationView {
@@ -25,15 +29,18 @@ struct ContentView: View {
                 VStack(spacing: 24) {
 
                     // ── USER ZONE ─────────────────────────────────────────────
+                    streakCard
                     mainStateSection
                     wakeWindowCard
                     appSelectionCard
 
+                    #if DEBUG
                     // ── DEBUG DIVIDER ─────────────────────────────────────────
                     debugDivider
 
                     // ── DEBUG ZONE ────────────────────────────────────────────
                     debugSection
+                    #endif
                 }
                 .padding()
             }
@@ -41,11 +48,17 @@ struct ContentView: View {
             .onAppear {
                 breadcrumbs = GetuppShared.loadBreadcrumbs()
                 shieldManager.reconcileState()
+                #if DEBUG
+                dayLog = GetuppShared.loadDayLog()
+                #endif
             }
             .onChange(of: scenePhase) { phase in
                 if phase == .active {
                     shieldManager.reconcileState()
                     breadcrumbs = GetuppShared.loadBreadcrumbs()
+                    #if DEBUG
+                    dayLog = GetuppShared.loadDayLog()
+                    #endif
                 }
             }
             .familyActivityPicker(
@@ -60,6 +73,32 @@ struct ContentView: View {
                     .environmentObject(shieldManager)
             }
         }
+    }
+
+    // MARK: - Streak card (user zone)
+
+    private var streakCard: some View {
+        GroupBox {
+            VStack(spacing: 4) {
+                Text(streakHeadline)
+                    .font(.title2.bold())
+                Text(streakSubline)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private var streakHeadline: String {
+        let count = shieldManager.streak.count
+        guard count > 0 else { return "No streak. Get up." }
+        return "🔥 \(count) morning\(count == 1 ? "" : "s")"
+    }
+
+    private var streakSubline: String {
+        shieldManager.streak.count > 0 ? "Don't break it." : "Take the photo tomorrow."
     }
 
     // MARK: - Main state section (user zone)
@@ -199,8 +238,9 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Debug divider
+    // MARK: - Debug divider + section
 
+    #if DEBUG
     private var debugDivider: some View {
         HStack {
             Rectangle().frame(height: 1).foregroundColor(.secondary.opacity(0.3))
@@ -211,8 +251,6 @@ struct ContentView: View {
             Rectangle().frame(height: 1).foregroundColor(.secondary.opacity(0.3))
         }
     }
-
-    // MARK: - Debug section
 
     private var debugSection: some View {
         VStack(spacing: 16) {
@@ -278,10 +316,70 @@ struct ContentView: View {
 
                         Button("Clear Verified") {
                             shieldManager.clearVerifiedDate()
+                            #if DEBUG
+                            dayLog = GetuppShared.loadDayLog()
+                            #endif
                         }
                         .buttonStyle(.bordered)
                         .tint(.orange)
                         .disabled(!shieldManager.isVerifiedToday)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            // Streak debug
+            GroupBox("Streak") {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Streak:")
+                        Spacer()
+                        Text("\(shieldManager.streak.count) (\(String(describing: shieldManager.streak.todayState)))")
+                            .monospacedDigit()
+                    }
+
+                    if dayLog.isEmpty {
+                        Text("No day-log entries yet")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    } else {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(dayLog.sorted(by: { $0.date > $1.date }).prefix(10), id: \.date) { record in
+                                Text("\(record.date) · sched:\(record.wasScheduled ? "✓" : "·") ran:\(record.sessionRan ? "✓" : "·") ver:\(record.verified ? "✓" : "·") emg:\(record.emergencyUsed ? "✓" : "·")")
+                                    .font(.caption.monospaced())
+                            }
+                        }
+                    }
+
+                    HStack(spacing: 12) {
+                        Button("Refresh Log") {
+                            dayLog = GetuppShared.loadDayLog()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Reset Day Log") {
+                            GetuppShared.saveDayLog([])
+                            dayLog = []
+                            shieldManager.refreshStreak()
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+
+                        Button("Run Self-Tests") {
+                            selfTestResults = runStreakSelfTests()
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.indigo)
+                    }
+
+                    if !selfTestResults.isEmpty {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(selfTestResults, id: \.self) { line in
+                                Text(line)
+                                    .font(.caption2.monospaced())
+                                    .foregroundColor(line.hasPrefix("PASS") ? .green : .red)
+                            }
+                        }
                     }
                 }
                 .padding(.vertical, 4)
@@ -346,6 +444,7 @@ struct ContentView: View {
             }
         }
     }
+    #endif
 
     // MARK: - Helpers
 

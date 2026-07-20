@@ -76,13 +76,18 @@ struct StreakResult {
 ///     change, not a data migration.
 ///   - appEnabled: whether GETUPP is currently enabled. POC always passes `true`
 ///     (disable-breaks-streak is not wired yet).
+///   - activeSessionDate: R6 — the "yyyy-MM-dd" day of a still-open session
+///     (window started, not yet finalized). While set for a PAST date (a timeout
+///     running across midnight), that date is held .pending regardless of its
+///     record — no premature +1, no break. Clearing the key finalizes the day.
 func deriveStreak(
     records: [DayRecord],
     today: String,
     now: Date,
     windowEnd: Date,
     timeoutDuration: TimeInterval,
-    appEnabled: Bool
+    appEnabled: Bool,
+    activeSessionDate: String? = nil
 ) -> StreakResult {
     guard appEnabled else {
         return StreakResult(count: 0, todayState: resolveTodayState(
@@ -125,6 +130,11 @@ func deriveStreak(
         let state: DayState
         if isToday {
             state = todayState
+        } else if cursorKey == activeSessionDate {
+            // R6: this past day's session is still open (cross-midnight timeout
+            // running). Hold it pending — skip, don't count, don't break — until
+            // the latch clears and its record resolves from data on disk.
+            state = .pending
         } else if let record = byDate[cursorKey] {
             state = resolvePastState(record)
         } else {
@@ -268,6 +278,7 @@ func runStreakSelfTests() -> [String] {
         windowEnd: Date,
         timeoutDuration: TimeInterval = 0,
         appEnabled: Bool = true,
+        activeSessionDate: String? = nil,
         expectedCount: Int,
         expectedState: DayState
     ) {
@@ -277,7 +288,8 @@ func runStreakSelfTests() -> [String] {
             now: now,
             windowEnd: windowEnd,
             timeoutDuration: timeoutDuration,
-            appEnabled: appEnabled
+            appEnabled: appEnabled,
+            activeSessionDate: activeSessionDate
         )
         let pass = result.count == expectedCount && result.todayState == expectedState
         if pass {
@@ -396,6 +408,63 @@ func runStreakSelfTests() -> [String] {
           records: [successRecord(daysAgo: 0), restRecord(daysAgo: 1), successRecord(daysAgo: 2)],
           windowEnd: windowClosed,
           expectedCount: 2, expectedState: .success)
+
+    // ── Active Days fixtures (R6 cross-midnight + unscheduled skip) ──────────
+
+    func verifiedRecord(daysAgo: Int) -> DayRecord {
+        var r = DayRecord.fresh(date: daysAgoString(daysAgo), wasScheduled: true)
+        r.verified = true
+        r.verifiedAt = calendar.date(byAdding: .day, value: -daysAgo, to: now)
+        return r
+    }
+
+    // 16. Cross-midnight, timeout still running (it's 00:50, yesterday's session
+    //     open): yesterday is verified on disk but held .pending by the latch —
+    //     no premature +1, older successes still count, nothing breaks.
+    check("R6: open session holds yesterday pending",
+          records: [verifiedRecord(daysAgo: 1)] + (2...4).map { successRecord(daysAgo: $0) },
+          windowEnd: windowClosed,
+          activeSessionDate: daysAgoString(1),
+          expectedCount: 3, expectedState: .neutral)
+
+    // 17. Same log after the timeout completes (latch cleared): the +1 lands on
+    //     yesterday from data already on disk.
+    check("R6: latch cleared — +1 lands on yesterday",
+          records: [verifiedRecord(daysAgo: 1)] + (2...4).map { successRecord(daysAgo: $0) },
+          windowEnd: windowClosed,
+          activeSessionDate: nil,
+          expectedCount: 4, expectedState: .neutral)
+
+    // 18. Emergency break at 00:10 mid-timeout marks YESTERDAY broken. While the
+    //     key is still set (transient, mid-wipe) yesterday stays pending…
+    check("R6: broken yesterday held pending while key set",
+          records: [brokenRecord(daysAgo: 1)] + (2...4).map { successRecord(daysAgo: $0) },
+          windowEnd: windowClosed,
+          activeSessionDate: daysAgoString(1),
+          expectedCount: 3, expectedState: .neutral)
+
+    //     …and once cleared, the broken wall stops the walk (older successes gone).
+    check("R6: broken yesterday breaks after latch clears",
+          records: [brokenRecord(daysAgo: 1)] + (2...4).map { successRecord(daysAgo: $0) },
+          windowEnd: windowClosed,
+          activeSessionDate: nil,
+          expectedCount: 0, expectedState: .neutral)
+
+    // 19. Post-midnight on an unscheduled day: yesterday's session still open,
+    //     today's own record says rest — today is untouched by the open session.
+    check("R6: today stays .rest during yesterday's open session",
+          records: [restRecord(daysAgo: 0), verifiedRecord(daysAgo: 1), successRecord(daysAgo: 2)],
+          windowEnd: windowClosed,
+          activeSessionDate: daysAgoString(1),
+          expectedCount: 1, expectedState: .rest)
+
+    // 20. Unscheduled days skip (Tue/Thu-style schedule): successes separated by
+    //     rest days still chain — days off don't break, don't build.
+    check("unscheduled skip: alternating rest days chain successes",
+          records: [successRecord(daysAgo: 0), restRecord(daysAgo: 1), successRecord(daysAgo: 2),
+                    restRecord(daysAgo: 3), successRecord(daysAgo: 4)],
+          windowEnd: windowClosed,
+          expectedCount: 3, expectedState: .success)
 
     return results
 }

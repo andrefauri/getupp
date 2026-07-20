@@ -15,11 +15,13 @@ struct InternalToolsView: View {
 
     @EnvironmentObject var shieldManager: ShieldManager
 
-    @State private var breadcrumbs:            [String]     = []
-    @State private var dayLog:                 [DayRecord]  = []
-    @State private var selfTestResults:        [String]     = []
-    @State private var timeoutSelfTestResults: [String]     = []
-    @State private var escapeSelfTestResults:  [String]     = []
+    @State private var breadcrumbs:               [String]     = []
+    @State private var dayLog:                    [DayRecord]  = []
+    @State private var selfTestResults:           [String]     = []
+    @State private var timeoutSelfTestResults:    [String]     = []
+    @State private var escapeSelfTestResults:     [String]     = []
+    @State private var activeDaysSelfTestResults: [String]     = []
+    @State private var sessionDateReadout:        String       = "—"
 
     var body: some View {
         ScrollView {
@@ -289,6 +291,64 @@ struct InternalToolsView: View {
                     .padding(.vertical, 4)
                 }
 
+                // Active Days debug
+                GroupBox("Active Days") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Active days:")
+                            Spacer()
+                            Text("\(shieldManager.activeDays.sorted().map(String.init).joined(separator: " "))")
+                                .monospacedDigit()
+                        }
+                        HStack {
+                            Text("Pending:")
+                            Spacer()
+                            Text(shieldManager.pendingActiveDays.map {
+                                $0.sorted().map(String.init).joined(separator: " ")
+                            } ?? "—").monospacedDigit()
+                        }
+                        HStack {
+                            Text("activeSessionDate:")
+                            Spacer()
+                            Text(sessionDateReadout).monospacedDigit()
+                        }
+
+                        HStack(spacing: 12) {
+                            Button("Refresh") {
+                                sessionDateReadout = ActiveDays.activeSessionDate() ?? "—"
+                            }
+                            .buttonStyle(.bordered)
+
+                            // R6 escape valve for manual tests — a lingering key
+                            // holds yesterday .pending and blocks its backfill.
+                            Button("Clear Session Date") {
+                                ActiveDays.clearActiveSessionDate()
+                                sessionDateReadout = "—"
+                                shieldManager.refreshStreak()
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.orange)
+                        }
+
+                        Button("Run Active Days Self-Tests") {
+                            activeDaysSelfTestResults = runActiveDaysSelfTests()
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.indigo)
+
+                        if !activeDaysSelfTestResults.isEmpty {
+                            VStack(alignment: .leading, spacing: 2) {
+                                ForEach(activeDaysSelfTestResults, id: \.self) { line in
+                                    Text(line)
+                                        .font(.caption2.monospaced())
+                                        .foregroundColor(line.hasPrefix("PASS") ? .green : .red)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+
                 // Schedule debug (Stop Schedule + Debug Window)
                 GroupBox("Schedule") {
                     VStack(spacing: 12) {
@@ -354,6 +414,7 @@ struct InternalToolsView: View {
         .onAppear {
             dayLog = GetuppShared.loadDayLog()
             breadcrumbs = GetuppShared.loadBreadcrumbs()
+            sessionDateReadout = ActiveDays.activeSessionDate() ?? "—"
         }
     }
 
@@ -380,6 +441,13 @@ struct InternalToolsView: View {
         Timeout.clearAllTimeoutState()
         defaults?.removeObject(forKey: Timeout.totalTimeoutMinutesKey)
 
+        // Active Days: clear queue + session anchor, but leave activeDays itself —
+        // the chosen days are real configuration, same as the wake window.
+        ActiveDays.clearPending()
+        ActiveDays.clearActiveSessionDate()
+        shieldManager.pendingActiveDays = nil
+        sessionDateReadout = "—"
+
         GetuppShared.saveDayLog([])
 
         shieldManager.removeShield()
@@ -393,6 +461,7 @@ struct InternalToolsView: View {
         selfTestResults           = []
         timeoutSelfTestResults    = []
         escapeSelfTestResults     = []
+        activeDaysSelfTestResults = []
 
         GetuppShared.logBreadcrumb("Reset Test State — cleared exempt/verified/timeout/day-log/escape-hatch state")
         breadcrumbs = GetuppShared.loadBreadcrumbs()

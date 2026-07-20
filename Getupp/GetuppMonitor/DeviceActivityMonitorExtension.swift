@@ -43,6 +43,23 @@ class DeviceActivityMonitorExtension: DeviceActivityMonitor {
         // so yesterday's state is gone before today's morning shields go up.
         Timeout.dailyMaintenance()
 
+        // Schedule maintenance BEFORE the day gate below — promoting a queued
+        // day removal is exactly what can make today unscheduled.
+        ActiveDays.scheduleMaintenance()
+
+        // Active Days gate: on an unscheduled day the window is a no-op — no
+        // session record, no session date, no shields. Days off don't break the
+        // streak and don't build it.
+        guard ActiveDays.isScheduledToday() else {
+            GetuppShared.logBreadcrumb("Unscheduled day — skipping session")
+            return
+        }
+
+        // R6: the session belongs to the day its window STARTED. Every
+        // session-lifecycle write from here on anchors to this key; clearing it
+        // (timeout completion or removeShield) is what finalizes the day.
+        ActiveDays.setActiveSessionDate(GetuppShared.todayKey())
+
         // Record that today's session ran, regardless of what happens below —
         // the streak only cares that the window fired, not whether the shield
         // ends up applied (already-verified and exempt days still "ran").

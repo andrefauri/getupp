@@ -17,11 +17,13 @@ struct SettingsView: View {
     @State private var showEditSheet     = false
     @State private var showCustomTimeout = false
     @State private var timeoutCopyLine   = ""
+    @State private var showDays          = false
+    @State private var showEscapeHatch   = false
 
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
-                wakeWindowCard
+                scheduleCard
                 timeoutCard
                 appSelectionCard
                 escapeHatchRow
@@ -52,12 +54,12 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Wake Window card
+    // MARK: - Schedule card (wake window + days)
 
-    private var wakeWindowCard: some View {
+    private var scheduleCard: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
-                Text("WAKE WINDOW")
+                Text("SCHEDULE")
                     .font(.caption.uppercaseSmallCaps())
                     .foregroundColor(.secondary)
 
@@ -90,9 +92,48 @@ struct SettingsView: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(shieldManager.authorizationStatus != .approved)
                 }
+
+                Divider()
+
+                daysRow
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 8)
+        }
+    }
+
+    private var daysRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            NavigationLink(isActive: $showDays) {
+                ActiveDaysView(onDeactivationIntent: {
+                    // Funnel: pop Days (unsaved), then push the Escape Hatch hub.
+                    // The delay lets the pop animation finish — NavigationView
+                    // rejects a same-tick pop+push.
+                    showDays = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        showEscapeHatch = true
+                    }
+                })
+            } label: {
+                HStack {
+                    Text("Days")
+                    Spacer()
+                    Text(ActiveDays.detailLabel(
+                        for: shieldManager.activeDays,
+                        firstWeekday: Calendar.current.firstWeekday
+                    ))
+                    .foregroundColor(.secondary)
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if let pending = shieldManager.pendingActiveDays {
+                Text("→ \(ActiveDays.detailLabel(for: pending, firstWeekday: Calendar.current.firstWeekday)) tomorrow")
+                    .font(.caption.bold())
+                    .foregroundColor(.orange)
+            }
         }
     }
 
@@ -202,7 +243,9 @@ struct SettingsView: View {
     private var escapeHatchRow: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                NavigationLink(destination: EscapeHatchView()) {
+                // isActive-bound so the Days screen's empty-state funnel can
+                // land here programmatically.
+                NavigationLink(destination: EscapeHatchView(), isActive: $showEscapeHatch) {
                     HStack {
                         Text("Escape Hatch")
                             .font(.headline)

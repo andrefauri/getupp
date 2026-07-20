@@ -88,8 +88,9 @@ struct WakeWindowEditSheet: View {
             return  // stay open so user sees the notice; they dismiss manually.
         }
 
-        // Case A: inside the new window right now, not blocked, not verified.
-        if draft.isWindowActive() && !shieldManager.isShielded && !shieldManager.isVerifiedToday {
+        // Case A: inside the new window right now (on a scheduled day), not blocked, not verified.
+        if draft.isWindowActive(activeDays: shieldManager.activeDays)
+            && !shieldManager.isShielded && !shieldManager.isVerifiedToday {
             showDay0Alert = true
             return
         }
@@ -128,8 +129,6 @@ struct WakeWindowEditSheet: View {
             startMinute: cal.component(.minute, from: startDate),
             endHour:     cal.component(.hour,   from: endDate),
             endMinute:   cal.component(.minute, from: endDate),
-            dayMode:     .everyday,
-            customDays:  [],
             isEnabled:   true
         )
     }

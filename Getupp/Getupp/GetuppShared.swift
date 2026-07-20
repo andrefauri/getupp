@@ -99,6 +99,15 @@ enum GetuppShared {
         dayFormatter.string(from: now)
     }
 
+    /// R6: the day a session-lifecycle write belongs to — the day the current
+    /// window STARTED (activeSessionDate), falling back to today when no session
+    /// is open. Windows can't cross midnight, so during the window the two are
+    /// identical; they differ only when a timeout runs past midnight — exactly
+    /// when writing to "today" would hit the wrong DayRecord.
+    private static func sessionKey(now: Date = Date()) -> String {
+        ActiveDays.activeSessionDate() ?? todayKey(now: now)
+    }
+
     /// Loads the full day log, oldest-or-newest order not guaranteed.
     static func loadDayLog() -> [DayRecord] {
         guard let data = defaults?.data(forKey: dayLogKey) else { return [] }
@@ -111,12 +120,12 @@ enum GetuppShared {
         defaults?.set(data, forKey: dayLogKey)
     }
 
-    /// Monitor extension's ONE write: marks today's session as having run.
+    /// Monitor extension's ONE write: marks the session's day as having run.
     /// Kept dumb and minimal per the extension's tight memory limits — creates
-    /// today's record if it doesn't exist yet (wasScheduled defaults to true,
+    /// the record if it doesn't exist yet (wasScheduled defaults to true,
     /// since intervalDidStart only fires on a scheduled day), else flips the flag.
     static func recordSessionRanToday(now: Date = Date()) {
-        let key = todayKey(now: now)
+        let key = sessionKey(now: now)
         var log = loadDayLog()
         if let index = log.firstIndex(where: { $0.date == key }) {
             log[index].sessionRan = true
@@ -128,9 +137,9 @@ enum GetuppShared {
         saveDayLog(log)
     }
 
-    /// Main app write: marks today's photo verification as passed.
+    /// Main app write: marks the session day's photo verification as passed.
     static func markVerifiedToday(now: Date = Date()) {
-        let key = todayKey(now: now)
+        let key = sessionKey(now: now)
         var log = loadDayLog()
         if let index = log.firstIndex(where: { $0.date == key }) {
             log[index].verified   = true
@@ -154,12 +163,15 @@ enum GetuppShared {
         saveDayLog(log)
     }
 
-    /// Main app write: marks today's Escape Hatch action as a surrendered day.
-    /// Used by BOTH Emergency Break and Pull the Plug — either one breaks the
-    /// streak the same way. deriveStreak() already treats emergencyUsed as
-    /// .broken; this is the one place that sets it.
+    /// Main app write: marks the session day's Escape Hatch action as a
+    /// surrendered day. Used by BOTH Emergency Break and Pull the Plug — either
+    /// one breaks the streak the same way. deriveStreak() already treats
+    /// emergencyUsed as .broken; this is the one place that sets it.
+    /// Anchored to sessionKey: a break at 00:30 mid-timeout must mark the
+    /// session's day (yesterday), not today — so callers MUST call this BEFORE
+    /// any path that clears activeSessionDate (i.e. before removeShield).
     static func markEmergencyUsedToday(now: Date = Date()) {
-        let key = todayKey(now: now)
+        let key = sessionKey(now: now)
         var log = loadDayLog()
         if let index = log.firstIndex(where: { $0.date == key }) {
             log[index].emergencyUsed = true
@@ -181,7 +193,8 @@ enum GetuppShared {
         var log = loadDayLog()
         guard !log.contains(where: { $0.date == key }) else { return }
 
-        let wasScheduled = (schedule?.isActiveDay(now: now) ?? false) && !isExemptToday()
+        let scheduledDay = ActiveDays.isScheduled(on: now, days: ActiveDays.load())
+        let wasScheduled = (schedule?.isEnabled ?? false) && scheduledDay && !isExemptToday()
         log.append(DayRecord.fresh(date: key, wasScheduled: wasScheduled))
         saveDayLog(log)
     }
@@ -190,6 +203,10 @@ enum GetuppShared {
     /// placeholders so the derivation doesn't need to guess. Never touches today
     /// or mutates existing records. Only backfills after the log's earliest
     /// existing record — a fresh install has no history to reconstruct.
+    ///
+    /// Known limitation (accepted for v1): elapsed days are stamped with the
+    /// CURRENT activeDays set, not the set that governed them at the time.
+    /// Self-limiting — maintenance runs on every foreground.
     static func backfillDayLog(schedule: WakeSchedule?, now: Date = Date()) {
         guard let schedule else { return }
         var log = loadDayLog()
@@ -201,13 +218,18 @@ enum GetuppShared {
         let todayStart = calendar.startOfDay(for: now)
         var existingDates = Set(log.map(\.date))
         var cursor = earliestDate
+        let activeDays = ActiveDays.load()
+        // R6 backfill guard: while activeSessionDate is set, that day is still
+        // open (cross-midnight timeout) — deleting the key is what finalizes it.
+        let openSessionKey = ActiveDays.activeSessionDate()
 
         while cursor < todayStart {
             defer { cursor = calendar.date(byAdding: .day, value: 1, to: cursor) ?? todayStart }
             let key = dayFormatter.string(from: cursor)
-            guard !existingDates.contains(key) else { continue }
+            guard !existingDates.contains(key), key != openSessionKey else { continue }
 
-            let wasScheduled = schedule.isActiveDay(now: cursor)
+            let wasScheduled = schedule.isEnabled
+                && ActiveDays.isScheduled(on: cursor, days: activeDays, calendar: calendar)
             log.append(DayRecord.fresh(date: key, wasScheduled: wasScheduled))
             existingDates.insert(key)
         }
@@ -234,7 +256,8 @@ enum GetuppShared {
             now: now,
             windowEnd: windowEnd,
             timeoutDuration: Timeout.effectiveStreakDuration(now: now),
-            appEnabled: isAppEnabled()
+            appEnabled: isAppEnabled(),
+            activeSessionDate: ActiveDays.activeSessionDate()
         )
     }
 
@@ -291,13 +314,18 @@ enum GetuppShared {
         }
     }
 
-    /// Removes all shields, unblocking everything.
+    /// Removes all shields, unblocking everything. Also finalizes the session
+    /// day (R6): every unshield path — window end, missed-callback reconcile,
+    /// escape hatch, debug unlock — ends the session, so the activeSessionDate
+    /// latch clears here. (Natural timeout completion clears it separately in
+    /// Timeout.completeTimeoutIfElapsed, which can't call this function.)
     static func removeShield() {
         store.shield.applications = nil
         store.shield.applicationCategories = nil
 
         defaults?.set(false, forKey: shieldedKey)
         defaults?.removeObject(forKey: activeBlockEndKey)
+        defaults?.removeObject(forKey: ActiveDays.activeSessionDateKey)
     }
 
     // MARK: - Daily verification check

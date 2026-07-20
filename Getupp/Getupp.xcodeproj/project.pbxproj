@@ -106,6 +106,7 @@
 		DF2751523007AA7900093885 /* Exceptions for "Getupp" folder in "GetuppMonitor" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				ActiveDays.swift,
 				GetuppShared.swift,
 				Streak.swift,
 				Timeout.swift,

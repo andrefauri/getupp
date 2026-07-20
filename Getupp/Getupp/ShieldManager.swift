@@ -61,6 +61,15 @@ class ShieldManager: ObservableObject {
     /// Non-nil when the last schedule registration failed.
     @Published var scheduleError: String?
 
+    // MARK: - Published properties (Active Days)
+
+    /// Which weekdays GETUPP arms (Calendar numbering, 1 = Sun … 7 = Sat).
+    /// Mirrors the App Group key — ActiveDays.load() is the source of truth.
+    @Published var activeDays: Set<Int>
+
+    /// Day change queued for tomorrow (same-day removal rule), nil when none.
+    @Published var pendingActiveDays: Set<Int>?
+
     // MARK: - Published properties (Escape Hatch)
 
     /// Pull the Plug's on/off switch. Mirrors GetuppShared.isAppEnabled().
@@ -108,6 +117,9 @@ class ShieldManager: ObservableObject {
 
         self.appEnabled          = GetuppShared.isAppEnabled()
         self.emergencyBreaksUsed = GetuppShared.emergencyBreaksUsed
+
+        self.activeDays        = ActiveDays.load()
+        self.pendingActiveDays = ActiveDays.loadPending()
 
         // All stored properties must be initialized before any instance method
         // call (loadSelection() below) — this must come after every other
@@ -177,6 +189,8 @@ class ShieldManager: ObservableObject {
     func applyImmediateBlock(for schedule: WakeSchedule) {
         applyShield()
         recordActiveBlockEnd(for: schedule)
+        // A day-0 block is a real session — it needs its R6 anchor too.
+        ActiveDays.setActiveSessionDate(GetuppShared.todayKey())
         GetuppShared.logBreadcrumb("Day-0 block applied immediately")
     }
 
@@ -189,7 +203,9 @@ class ShieldManager: ObservableObject {
     // MARK: - Registration engine
 
     /// Stops all known window activities, then registers a new repeating schedule.
-    /// Phase A: .everyday → single "getupp.window.everyday" activity.
+    /// ONE daily activity regardless of active days — the monitor gates each
+    /// morning with ActiveDays.isScheduledToday(). Registering per-weekday
+    /// activities would multiply the flaky-callback surface by 7 for no benefit.
     private func registerSchedule(_ schedule: WakeSchedule) throws {
         let center = DeviceActivityCenter()
 
@@ -289,12 +305,18 @@ class ShieldManager: ObservableObject {
         // promotes a queued downgrade. Idempotent; extensions run it too.
         Timeout.dailyMaintenance(now: now)
 
+        // Schedule maintenance right after (same ordering as the monitor):
+        // promotes a queued day change and sweeps a stale session date.
+        ActiveDays.scheduleMaintenance(now: now)
+
         // Re-sync published state that maintenance (or an extension) may have
         // changed behind our back — the App Group is the source of truth.
         isShielded             = defaults?.bool(forKey: GetuppShared.shieldedKey) ?? false
         totalTimeoutMinutes    = Timeout.totalMinutes
         timeoutDuration        = Timeout.currentDuration
         pendingTimeoutDuration = Timeout.pendingDuration
+        activeDays             = ActiveDays.load()
+        pendingActiveDays      = ActiveDays.loadPending()
 
         // Lazy resolution: never trust a callback to fire at window end. Every
         // app-active transition snapshots today and backfills any unresolved
@@ -337,15 +359,19 @@ class ShieldManager: ObservableObject {
         // ── No activeBlockEnd — derive expected state from WakeSchedule ──────────
         guard let schedule = wakeSchedule, schedule.isEnabled else { return }
 
-        let insideWindow = schedule.isWindowActive(now: now)
+        // Day-aware (check-on-open layer for Active Days): an unscheduled day
+        // is never "inside the window," even if the monitor misread the set.
+        let insideWindow = schedule.isWindowActive(activeDays: activeDays, now: now)
         let verified     = GetuppShared.isVerifiedToday()
         let exempt       = GetuppShared.isExemptToday()
 
         if insideWindow && !verified && !exempt {
             if !isShielded {
-                // Missed intervalDidStart.
+                // Missed intervalDidStart — a recovered session still needs its
+                // R6 anchor, same as the monitor writes at window arm.
                 applyShield()
                 recordActiveBlockEnd(for: schedule, now: now)
+                ActiveDays.setActiveSessionDate(GetuppShared.todayKey(now: now))
                 GetuppShared.logBreadcrumb("Reconcile: missed intervalDidStart — shield applied")
             }
         } else if !insideWindow && isShielded && !verified {
@@ -369,7 +395,7 @@ class ShieldManager: ObservableObject {
         if isShielded {
             let end = Timeout.beginTimeout(
                 now: now,
-                nextWindowStart: wakeSchedule?.nextWindowStart(after: now)
+                nextWindowStart: wakeSchedule?.nextWindowStart(after: now, activeDays: activeDays)
             )
             timeoutEndTime = end
             registerTimeoutSchedule(endingAt: end, now: now)
@@ -432,12 +458,62 @@ class ShieldManager: ObservableObject {
         guard let newEnd = Timeout.extendTimeout(
             by: delta,
             now: now,
-            nextWindowStart: wakeSchedule?.nextWindowStart(after: now)
+            nextWindowStart: wakeSchedule?.nextWindowStart(after: now, activeDays: activeDays)
         ) else { return }
 
         timeoutEndTime = newEnd
         registerTimeoutSchedule(endingAt: newEnd, now: now)
         GetuppShared.logBreadcrumb("Timeout extended — now ends \(newEnd.formatted(date: .omitted, time: .shortened))")
+    }
+
+    // MARK: - Active Days
+
+    /// Saves a new active-days set with the same-day rule (mirrors Timeout R5):
+    /// removing today while today's window hasn't ended queues for tomorrow;
+    /// everything else applies immediately and cancels any queued change.
+    /// Returns true if the removal queued (so the UI can call the cheat out).
+    /// No re-registration — the single daily activity is untouched; the
+    /// monitor's isScheduledToday() gate does the day-to-day governing.
+    @discardableResult
+    func setActiveDays(_ proposed: Set<Int>) -> Bool {
+        let now     = Date()
+        let current = ActiveDays.load()
+
+        let result = ActiveDays.resolveSave(
+            current: current,
+            proposed: proposed,
+            todayWeekday: Calendar.current.component(.weekday, from: now),
+            todayLocked: isTodayWindowLocked(now: now)
+        )
+
+        ActiveDays.save(result.apply)
+        if let queued = result.queued {
+            ActiveDays.savePending(queued, now: now)
+        } else {
+            ActiveDays.clearPending()
+        }
+
+        activeDays        = result.apply
+        pendingActiveDays = result.queued
+        GetuppShared.logBreadcrumb(
+            "Active days saved — \(result.apply.sorted())"
+            + (result.queued.map { ", queued for tomorrow: \($0.sorted())" } ?? "")
+        )
+        return result.queued != nil
+    }
+
+    /// The same-day lock: today's window hasn't ended yet. Pre-window counts —
+    /// removing today at 6:29 to dodge a 6:30 window is the same cheat as
+    /// removing it mid-block.
+    private func isTodayWindowLocked(now: Date) -> Bool {
+        guard let schedule = wakeSchedule, schedule.isEnabled else { return false }
+        let calendar = Calendar.current
+        var comps    = calendar.dateComponents([.year, .month, .day], from: now)
+        comps.hour   = schedule.endHour
+        comps.minute = schedule.endMinute
+        comps.second = 0
+        guard let windowEnd = calendar.date(from: comps) else { return false }
+        return now < windowEnd
     }
 
     func clearVerifiedDate() {
@@ -515,9 +591,13 @@ class ShieldManager: ObservableObject {
     /// contract, and it auto-clears at midnight so tomorrow's window is
     /// untouched.
     func emergencyBreak() {
+        // Mark BEFORE the wipe (R6): markEmergencyUsedToday anchors to
+        // activeSessionDate, and wipeTimeoutAndUnshield → removeShield clears
+        // that key. A post-midnight break mid-timeout must mark the session's
+        // day (yesterday), not today.
+        GetuppShared.markEmergencyUsedToday()
         wipeTimeoutAndUnshield()
         markExemptToday()
-        GetuppShared.markEmergencyUsedToday()
         GetuppShared.incrementEmergencyBreaksUsed()
         emergencyBreaksUsed = GetuppShared.emergencyBreaksUsed
         refreshStreak()
@@ -530,17 +610,19 @@ class ShieldManager: ObservableObject {
     /// appEnabled off. Deletes nothing — selection, wake window, timeout
     /// duration, and any queued downgrade all survive untouched.
     func pullThePlug() {
-        stopMonitoring()
-        wipeTimeoutAndUnshield()
-        GetuppShared.setAppEnabled(false)
-        appEnabled = false
-
         // Also write the broken DayRecord, not just appEnabled=false. appEnabled
         // only zeroes the streak WHILE disabled (see deriveStreak's early return);
         // the broken record is what stops the backward walk after re-enable, so
         // successes from before Pull the Plug can't resurrect the old streak
         // ("no backdating"). Looks redundant with appEnabled=false — isn't.
+        // BEFORE the wipe (R6): it anchors to activeSessionDate, which
+        // wipeTimeoutAndUnshield → removeShield clears.
         GetuppShared.markEmergencyUsedToday()
+
+        stopMonitoring()
+        wipeTimeoutAndUnshield()
+        GetuppShared.setAppEnabled(false)
+        appEnabled = false
 
         refreshStreak()
         GetuppShared.logBreadcrumb("Pull the Plug confirmed — GETUPP disabled")
@@ -595,7 +677,10 @@ class ShieldManager: ObservableObject {
         var windowStart: Date?
         var windowEnd: Date?
 
-        if let schedule = wakeSchedule {
+        // Unscheduled days have no window: derivePhase reads .free (a running
+        // timeout still wins), which keeps the Emergency Break row correctly
+        // disabled on a rest day.
+        if let schedule = wakeSchedule, ActiveDays.isScheduledToday(now: now) {
             let calendar = Calendar.current
             var startComps = calendar.dateComponents([.year, .month, .day], from: now)
             startComps.hour   = schedule.startHour

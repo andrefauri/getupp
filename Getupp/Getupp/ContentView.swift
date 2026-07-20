@@ -184,10 +184,31 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
+
+                // Active Days P1: only renders on unscheduled days, so a quiet
+                // morning reads as "day off," not "GETUPP broke."
+                if let hint = nextArmHint {
+                    Text(hint)
+                        .font(.caption.bold())
+                        .foregroundColor(.secondary)
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
         }
+    }
+
+    /// "Next: Monday" — non-nil only when a schedule exists and today is NOT a
+    /// scheduled day.
+    private var nextArmHint: String? {
+        guard let schedule = shieldManager.wakeSchedule, schedule.isEnabled,
+              !ActiveDays.isScheduledToday() else { return nil }
+        guard let next = schedule.nextWindowStart(after: Date(), activeDays: shieldManager.activeDays) else {
+            return nil
+        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE"
+        return "Next: \(formatter.string(from: next))"
     }
 
     // MARK: - Settings entry point

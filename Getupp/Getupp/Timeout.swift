@@ -33,6 +33,10 @@ enum Timeout {
     static let shieldedKey         = "isShielded"
     static let activeBlockEndKey   = "activeBlockEnd"
     static let lastVerifiedDateKey = "lastVerifiedDate"
+    // KEEP IN SYNC with ActiveDays.swift — the R6 session-day anchor. Duplicated
+    // here because completeTimeoutIfElapsed() must clear it from the shield-action
+    // extension, which doesn't link ActiveDays.swift.
+    static let activeSessionDateKey = "activeSessionDate"
 
     // MARK: - Timeout App Group keys
 
@@ -186,6 +190,8 @@ enum Timeout {
     /// Called on successful verification. Writes the clamped end time and deletes
     /// activeBlockEnd (the two keys describe disjoint phases and must never
     /// coexist). Shields are NOT touched here — they simply stay on.
+    /// Deliberately does NOT touch activeSessionDate (R6): the timeout INHERITS
+    /// the session's day from window arm — don't "fix" this by re-deriving it.
     static func beginTimeout(now: Date = Date(), nextWindowStart: Date?) -> Date {
         let end = clampedEnd(now: now, duration: currentDuration, nextWindowStart: nextWindowStart)
         defaults?.set(end, forKey: timeoutEndTimeKey)
@@ -211,6 +217,12 @@ enum Timeout {
         guard let end = loadTimeoutEnd(), now >= end else { return false }
 
         defaults?.removeObject(forKey: timeoutEndTimeKey)
+
+        // R6: natural completion finalizes the session day. The verified flag
+        // was already written to the right DayRecord at photo time — deleting
+        // this key is the "credit": deriveStreak stops holding that day .pending
+        // and its record resolves .success from data already on disk.
+        defaults?.removeObject(forKey: activeSessionDateKey)
 
         let verifiedAt = defaults?.object(forKey: lastVerifiedDateKey) as? Date
         let minutes    = servedMinutes(end: end, verifiedAt: verifiedAt, fallbackDuration: currentDuration)
@@ -334,6 +346,14 @@ func runTimeoutSelfTests() -> [String] {
           Timeout.clampedEnd(now: now, duration: 1800,
                              nextWindowStart: now.addingTimeInterval(86400))
             == now.addingTimeInterval(1800))
+
+    // Active Days OQ1: with a one-day-a-week schedule, nextWindowStart can be up
+    // to 6 days out. min() means the far bound never wins — even a max-duration
+    // (8 h) timeout ends on time, unclamped.
+    check("clamp: 6-day-out next window (Monday-only schedule) is inert",
+          Timeout.clampedEnd(now: now, duration: 8 * 3600,
+                             nextWindowStart: now.addingTimeInterval(6 * 86400))
+            == now.addingTimeInterval(8 * 3600))
 
     check("extend: clamped to next window start",
           Timeout.extendedEnd(currentEnd: futureEnd, delta: 7200, nextWindowStart: soonWindow)
